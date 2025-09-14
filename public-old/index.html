@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Audience Segments Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* Minimal extra tweaks so it looks nice even if your style.css is unchanged */
+    .panel { background:#fff; padding:12px; margin:12px 0; border-radius:8px; border:1px solid #eaeaea; }
+    .meta { margin:8px 0; color:#374151; font-weight:500; }
+    .alert.error { background:#fee2e2; color:#991b1b; padding:10px; border-radius:6px; }
+    table button { padding:6px 10px; border-radius:6px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+    table a { color: #0f172a; text-decoration: none; font-weight:600; }
+    table a:hover { text-decoration: underline; color: #2563eb; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h2 class="logo">AudienceApp</h2>
+      <nav id="sidebar-nav">
+        <a href="#" class="active" onclick="setActive(this); showView('segments')">Segments</a>
+        <a href="#" onclick="setActive(this); showView('campaigns')">Campaigns</a>
+        <a href="#" onclick="setActive(this); showView('users')">Users</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#fff;border-bottom:1px solid #e5e7eb;">
+          <h1 id="page-title" style="margin:0">Segments</h1>
+          <div>
+            <button onclick="refreshView()" style="padding:8px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;cursor:pointer">Refresh</button>
+          </div>
+        </div>
+      </header>
+
+      <section id="content" style="padding:20px;">
+        <!-- dynamic content -->
+      </section>
+
+      <div id="preview-form" class="panel" style="display:none;">
+        <h3 style="margin-top:0">Segment Preview</h3>
+        <label>Field
+          <select id="ruleField">
+            <option value="total_spend">total_spend</option>
+            <option value="visits">visits</option>
+            <option value="last_active_days">last_active_days</option>
+          </select>
+        </label>
+        <label style="margin-left:12px">Operator
+          <select id="ruleOp">
+            <option value=">"> &gt; </option>
+            <option value="<"> &lt; </option>
+            <option value=">=">&ge;</option>
+            <option value="<=">&le;</option>
+            <option value="=">=</option>
+          </select>
+        </label>
+        <label style="margin-left:12px">Value <input id="ruleValue" type="text" style="padding:6px;border-radius:6px;border:1px solid #e5e7eb" value="0" /></label>
+        <div style="margin-top:10px">
+          <button onclick="doPreview()" style="padding:8px 12px;border-radius:6px;border:none;background:#2563eb;color:#fff;cursor:pointer">Preview</button>
+          <button onclick="hidePreview()" style="padding:8px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;margin-left:8px">Close</button>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+<script>
+  // state
+  let currentView = 'segments';
+  let usersCache = [];
+  let page = 1;
+  const pageSize = 20;
+
+  // --- utilities
+  function setActive(link) {
+    document.querySelectorAll('#sidebar-nav a').forEach(a => a.classList.remove('active'));
+    link.classList.add('active');
+  }
+  function refreshView(){ showView(currentView); }
+
+  function escapeHtml(text){
+    if (text == null) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function showView(view){
+    currentView = view;
+    document.getElementById('preview-form').style.display = 'none';
+    switch(view){
+      case 'segments': loadSegments(); break;
+      case 'campaigns': loadCampaigns(); break;
+      case 'users': loadUsers(); break;
+      default: loadSegments();
+    }
+  }
+
+  // ---------------- SEGMENTS ----------------
+  async function loadSegments(){
+    document.getElementById('page-title').textContent = 'Segments';
+    const content = document.getElementById('content');
+    content.innerHTML = '<p>Loading segments...</p>';
+    try {
+      const res = await fetch('/api/segments');
+      if (!res.ok) throw new Error('Failed to fetch segments: ' + res.status);
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) {
+        content.innerHTML = '<div class="panel">No segments yet. Create one using the builder.</div>';
+        return;
+      }
+
+      content.innerHTML = `
+        <table>
+          <thead><tr><th>Name</th><th>Audience</th><th>Created</th><th>Action</th></tr></thead>
+          <tbody>
+            ${data.map(s => `
+              <tr>
+                <td><a href="#" onclick='viewSegmentById("${s._id}")'>${escapeHtml(s.name)}</a></td>
+                <td>${s.audience_size || 0}</td>
+                <td>${s.created_at ? new Date(s.created_at).toLocaleString() : ''}</td>
+                <td><button onclick='viewSegmentById("${s._id}")'>View</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    } catch (e) {
+      content.innerHTML = `<div class="alert error">Failed to load segments: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // fetch saved segment by id, then call preview and render results
+  async function viewSegmentById(id){
+    if (!id) return;
+    document.getElementById('page-title').textContent = 'Loading segment...';
+    const content = document.getElementById('content');
+    content.innerHTML = `<p>Loading audience for segment...</p>`;
+    try {
+      const segRes = await fetch(`/api/segments/${id}`);
+      if (!segRes.ok) {
+        const txt = await segRes.text();
+        throw new Error(`Segment fetch failed: ${segRes.status} ${txt}`);
+      }
+      const seg = await segRes.json();
+
+      // preview
+      const previewRes = await fetch('/api/segments/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: seg.rules })
+      });
+      const data = await previewRes.json();
+      if (data.error) throw new Error(data.error || 'Preview failed');
+
+      const sample = data.sample || [];
+      const count = typeof data.count === 'number' ? data.count : sample.length;
+      usersCache = sample;
+      content.innerHTML = `
+        <div class="meta">Segment: <strong>${escapeHtml(seg.name)}</strong> — Audience size: <strong>${count}</strong></div>
+        ${renderUsersTableHtml(sample)}
+      `;
+    } catch (err) {
+      console.error('viewSegmentById error', err);
+      content.innerHTML = `<div class="alert error">Failed to load segment audience: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // ---------------- CAMPAIGNS ----------------
+  async function loadCampaigns(){
+    document.getElementById('page-title').textContent = 'Campaigns';
+    const content = document.getElementById('content');
+    content.innerHTML = '<p>Loading campaigns...</p>';
+    try {
+      const res = await fetch('/api/campaigns');
+      if (!res.ok) throw new Error('Failed to fetch campaigns: ' + res.status);
+      const data = await res.json();
+      content.innerHTML = `
+        <table>
+          <thead><tr><th>Name</th><th>Audience</th><th>Sent</th><th>Failed</th><th>Created</th></tr></thead>
+          <tbody>
+            ${data.map(c => `
+              <tr>
+                <td>${escapeHtml(c.name)}</td>
+                <td>${c.audience_size || 0}</td>
+                <td>${c.sent_count||0}</td>
+                <td>${c.failed_count||0}</td>
+                <td>${c.created_at ? new Date(c.created_at).toLocaleDateString() : ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    } catch (e) {
+      content.innerHTML = `<div class="alert error">Failed to load campaigns: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // ---------------- USERS ----------------
+  async function loadUsers(pageNum = 1){
+    document.getElementById('page-title').textContent = 'Users (sample)';
+    page = pageNum;
+    const content = document.getElementById('content');
+    content.innerHTML = '<p>Loading users...</p>';
+    try {
+      // try paged users endpoint if it exists
+      let res = await fetch(`/api/users?limit=${pageSize}&page=${page}`);
+      if (!res.ok) {
+        // fallback to sample route
+        res = await fetch('/api/users/sample');
+      }
+      const data = await res.json();
+      // support both shapes: { total, users } or { count, sample }
+      let users = [];
+      let total = 0;
+      if (Array.isArray(data.users)) {
+        users = data.users;
+        total = data.total || users.length;
+      } else if (Array.isArray(data.sample)) {
+        users = data.sample;
+        total = data.count || users.length;
+      } else if (Array.isArray(data)) {
+        users = data;
+        total = data.length;
+      }
+      usersCache = users;
+      content.innerHTML = `<div class="meta">Total users: <strong>${total}</strong></div>${renderUsersTableHtml(users)}`;
+      renderPager(total);
+    } catch (e) {
+      content.innerHTML = `<div class="alert error">Failed to load users: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderUsersTableHtml(users){
+    if (!users || !users.length) return '<div class="panel">No users to show.</div>';
+    return `
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Total Spend</th><th>Visits</th><th>Last Active</th></tr></thead>
+        <tbody>
+          ${users.map(u => `
+            <tr>
+              <td>${escapeHtml(u.name)}</td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${u.total_spend != null ? '$' + u.total_spend.toFixed ? ('$' + Number(u.total_spend).toFixed(2)) : '$' + u.total_spend : ''}</td>
+              <td>${u.visits != null ? u.visits : ''}</td>
+              <td>${u.last_active_at ? new Date(u.last_active_at).toLocaleDateString() : ''}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // pager
+  function renderPager(total){
+    const footer = document.getElementById('content');
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pagerHtml = `<div style="margin-top:12px">` +
+      (page > 1 ? `<button onclick="loadUsers(${page-1})">Prev</button>` : '') +
+      ` Page ${page} of ${totalPages} ` +
+      (page < totalPages ? `<button onclick="loadUsers(${page+1})">Next</button>` : '') +
+      `</div>`;
+    footer.insertAdjacentHTML('beforeend', pagerHtml);
+  }
+
+  // ---------------- PREVIEW FORM ----------------
+  function showPreviewForm(){ document.getElementById('preview-form').style.display = 'block'; document.getElementById('page-title').textContent = 'Preview by Rule'; }
+  function hidePreview(){ document.getElementById('preview-form').style.display = 'none'; showView('segments'); }
+
+  async function doPreview(){
+    const f = document.getElementById('ruleField').value;
+    const op = document.getElementById('ruleOp').value;
+    let val = document.getElementById('ruleValue').value;
+    if (f !== 'last_active_days') val = Number(val) || 0;
+    const ast = { op: 'COND', field: f, operator: op, value: val };
+    document.getElementById('content').innerHTML = '<p>Running preview...</p>';
+    try {
+      const res = await fetch('/api/segments/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: ast })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      usersCache = data.sample || [];
+      const count = typeof data.count === 'number' ? data.count : usersCache.length;
+      document.getElementById('content').innerHTML = `<div class="meta">Preview result — Audience size: <strong>${count}</strong></div>${renderUsersTableHtml(usersCache)}`;
+    } catch (err) {
+      document.getElementById('content').innerHTML = `<div class="alert error">Preview failed: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // boot
+  showView('segments');
+</script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+/* client/src/index.css
+   Merges old index.css layout with modern dark/clean UI, animations and component helpers.
+   Use this file as the single global stylesheet (imported in main.jsx).
+*/
+
+/* --- Root & layout --- */
+:root{
+  --bg: #0b1220;
+  --panel: #0f1724;
+  --muted: #9fb7d9;
+  --accent: #2563eb;
+  --accent2: #7c3aed;
+  --surface: #0b1220;
+  --glass: rgba(255,255,255,0.03);
+  --text: #e6eef8;
+  --card-border: rgba(255,255,255,0.04);
+}
+
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body {
+  margin: 0;
+  font-family: "Segoe UI", Roboto, Inter, system-ui, -apple-system, "Helvetica Neue", Arial;
+  background: linear-gradient(180deg,#071029 0%, #031220 100%);
+  color: var(--text);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  line-height:1.45;
+}
+
+/* Layout container (mimics your old .layout) */
+.layout {
+  display: flex;
+  min-height: 100vh;
+  height: 100%;
+}
+
+/* Sidebar (adapted from your old CSS but modernized) */
+.sidebar {
+  background: linear-gradient(180deg,#0b1220,#071029);
+  color: #fff;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border-right: 1px solid rgba(255,255,255,0.02);
+  gap: 12px;
+  position: relative;
+}
+
+.sidebar .logo {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  letter-spacing: 0.2px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+
+.sidebar .logo .mark{
+  width:34px;height:34px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
+  background: linear-gradient(135deg,var(--accent2),#06b6d4); font-weight:700;
+}
+
+/* nav links */
+.sidebar nav { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.sidebar nav a {
+  display: block;
+  padding: 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #cbd5e1;
+  transition: background .16s ease, transform .12s ease;
+  font-size: 14px;
+}
+.sidebar nav a:hover { background: rgba(255,255,255,0.03); transform: translateX(6px); color: white; }
+.sidebar nav a.active { background: linear-gradient(90deg,var(--accent2),var(--accent)); color: #fff; transform:none; }
+
+/* Main area */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* header */
+header.app-header {
+  padding: 14px 20px;
+  background: transparent;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.app-header .left { display:flex; gap:12px; align-items:center; }
+.app-header h1 { margin:0; font-size:18px; letter-spacing:0.2px; }
+.app-header .controls { display:flex; gap:8px; align-items:center; }
+
+/* content area similar to your #content */
+#content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Card & table styles */
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid var(--card-border);
+  box-shadow: 0 8px 24px rgba(2,8,20,0.5);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: transparent;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.table thead th {
+  text-align:left;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.table tbody tr {
+  transition: background .12s ease, transform .12s ease;
+}
+.table tbody tr:hover {
+  transform: translateY(-2px);
+  background: linear-gradient(90deg, rgba(255,255,255,0.012), rgba(255,255,255,0.01));
+}
+.table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  font-size: 14px;
+}
+
+/* buttons, inputs */
+.btn {
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.04);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.btn:hover{ transform: translateY(-2px); box-shadow: 0 8px 18px rgba(2,10,30,0.5); }
+.btn.primary{ background: linear-gradient(90deg, var(--accent2), var(--accent)); color: #fff; border: none; }
+.btn.ghost{ background: transparent; border: none; padding:6px 10px; color: var(--muted); }
+
+.input {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.03);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  outline:none;
+}
+.input:focus { box-shadow: 0 6px 24px rgba(2,10,30,0.45); border-color: rgba(124,58,237,0.9); }
+
+/* small helpers */
+.muted { color: var(--muted); font-size: 13px; }
+.hint { font-size: 13px; color: rgba(255,255,255,0.6); }
+
+/* segment list row (used by SegmentsList.jsx) */
+.segment-row {
+  padding: 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform .14s ease, box-shadow .14s ease;
+  display:flex; justify-content:space-between; align-items:center;
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));
+  border: 1px solid rgba(255,255,255,0.02);
+}
+.segment-row:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 12px 36px rgba(2,10,30,0.6);
+}
+
+/* spinner centering */
+.center {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+/* responsive */
+@media (max-width: 900px) {
+  .sidebar { width: 64px; padding: 12px; }
+  .sidebar nav a { font-size: 12px; padding: 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .app-header { padding: 10px 12px; }
+  #content { padding: 12px; }
+}
+
+/* small animation helpers used by Framer Motion (fallback) */
+.fade-enter { opacity: 0; transform: translateY(6px); }
+.fade-enter-active { opacity: 1; transform: translateY(0); transition: all .2s ease; }
