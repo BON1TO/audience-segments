@@ -7,7 +7,7 @@ const BASE = typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL
 
 const api = axios.create({
   baseURL: BASE,            // e.g. http://localhost:4000
-  withCredentials: true,    // set false if you don't use cookies/auth
+  withCredentials: false,    //false since i dont use cookies
   headers: { "Content-Type": "application/json" },
 });
 
