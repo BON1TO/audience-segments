@@ -1,20 +1,24 @@
 // client/src/lib/api.js
 import axios from "axios";
 
-const BASE = typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL
-  ? import.meta.env.VITE_API_URL
-  : "";
+// ✅ Hardcode backend URL for production, fallback to localhost for dev
+const BASE =
+  import.meta.env?.VITE_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname.includes("onrender.com")
+    ? "https://audience-segments.onrender.com"
+    : "http://localhost:4000");
+
+console.log("API Base URL:", BASE); // Debug log, remove later if you want
 
 const api = axios.create({
-  baseURL: BASE,            // e.g. http://localhost:4000
-  withCredentials: false,    //false since i dont use cookies
+  baseURL: BASE,
+  withCredentials: false, // false since you don’t use cookies
   headers: { "Content-Type": "application/json" },
 });
 
 // helper that normalizes backend responses into { items, total, page, limit }
 function normalizeListResponse(resp, defaultPage = 1, defaultLimit = 50) {
   const data = resp?.data ?? resp;
-  // data might be: { items: [...] } || { users: [...] } || { segments: [...] } || [...] || { total, users }
   let items = [];
   if (Array.isArray(data)) items = data;
   else items = data.items ?? data.users ?? data.segments ?? [];
@@ -52,13 +56,9 @@ export const getCampaigns = async (params) => {
 };
 
 // create a new segment
-// NOTE: adjust endpoint to match your backend - see comment below
 export const createSegment = async (segmentData) => {
-  // If your backend expects POST /api/segments/new change the path to '/api/segments/new'
-  // Most REST conventions use POST /api/segments to create a new segment.
   const resp = await api.post("/api/segments", segmentData);
   return resp.data;
 };
-
 
 export default api;
