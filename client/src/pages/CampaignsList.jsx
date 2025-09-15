@@ -1,8 +1,8 @@
+// src/pages/CampaignsList.jsx
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import api from "../lib/api";
-import { listItemVariants } from "../styles/motionVariants";
+import { listItemVariants, fadeIn } from "../styles/motionVariants";
 import "../styles/theme.css";
 
 export default function CampaignsList({
@@ -14,10 +14,10 @@ export default function CampaignsList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [segments, setSegments] = useState([]);
-  const [attachingTo, setAttachingTo] = useState(null);
+  const [attachingTo, setAttachingTo] = useState(null); // campaign obj while attaching
   const [attachLoading, setAttachLoading] = useState(false);
   const [attachSegmentId, setAttachSegmentId] = useState("");
-  const [previewing, setPreviewing] = useState(null);
+  const [previewing, setPreviewing] = useState(null); // campaign obj being previewed
 
   // ---------- helpers ----------
   const normalizeId = (raw) => {
@@ -91,15 +91,23 @@ export default function CampaignsList({
       try {
         setLoading(true);
         setError("");
+        const res = await fetch(apiUrl, { signal: controller.signal });
+        const text = await res.text();
+        let data;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch (parseErr) {
+          console.warn("[CampaignsList] response text (non-json):", text);
+          throw new Error(`Non-JSON response (status ${res.status})`);
+        }
 
-        // Use centralized api.get so backend host is used
-        const res = await api.get(apiUrl, { signal: controller.signal }).catch((e) => {
-          // axios doesn't accept AbortController signal directly in older versions; ignore if aborted
-          if (e?.code === "ERR_CANCELED") throw new DOMException("Aborted", "AbortError");
-          throw e;
-        });
+        if (!res.ok) {
+          console.warn("[CampaignsList] non-ok response:", res.status, data);
+          throw new Error(`Status ${res.status}: ${data?.message || JSON.stringify(data)}`);
+        }
 
-        const data = res?.data;
+        if (!mounted) return;
+
         const items =
           Array.isArray(data) && data.length
             ? data
@@ -111,14 +119,13 @@ export default function CampaignsList({
             ? data.data
             : [];
 
-        if (!mounted) return;
         setCampaigns(items);
       } catch (e) {
         if (e.name === "AbortError") {
           console.log("[CampaignsList] fetch aborted");
         } else {
           console.error("[CampaignsList] fetch error:", e);
-          setError(String(e?.message || "Failed to fetch campaigns"));
+          setError(String(e.message || "Failed to fetch campaigns"));
         }
       } finally {
         if (mounted) setLoading(false);
@@ -128,16 +135,20 @@ export default function CampaignsList({
     load();
     return () => {
       mounted = false;
-      try { controller.abort(); } catch {}
+      controller.abort();
     };
   }, [apiUrl]);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get(segmentsApi);
-        const data = res?.data;
-        const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : data.segments || [];
+        const res = await fetch(segmentsApi);
+        if (!res.ok) {
+          console.warn("[CampaignsList] failed to load segments", res.status);
+          return;
+        }
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : data.segments || [];
         setSegments(list);
       } catch (err) {
         console.warn("[CampaignsList] segments load error:", err);
@@ -160,8 +171,12 @@ export default function CampaignsList({
     try {
       setPreviewing({ _loading: true });
 
-      const res = await api.get(`${apiUrl}/${id}`);
-      const campaign = res.data;
+      const res = await fetch(`${apiUrl}/${id}`);
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `Status ${res.status}`);
+      }
+      const campaign = await res.json();
 
       // compute audience (try segment users endpoint)
       let audience = typeof campaign.audience_size === "number" ? campaign.audience_size : 0;
@@ -169,16 +184,19 @@ export default function CampaignsList({
       const segIdNorm = normalizeId(segId);
       if (segIdNorm) {
         try {
-          const su = await api.get(`/api/segments/${segIdNorm}/users`, { params: { limit: 1 } });
-          if (su?.data?.total != null) audience = su.data.total;
-        } catch (e) {
-          // fallback: get segment doc
-          try {
-            const sres = await api.get(`/api/segments/${segIdNorm}`);
-            if (sres?.data?.audience_size != null) audience = sres.data.audience_size;
-          } catch (e2) {
-            console.warn("Failed to fetch segment audience:", e, e2);
+          const su = await fetch(`/api/segments/${segIdNorm}/users?limit=1`);
+          if (su.ok) {
+            const suData = await su.json();
+            if (typeof suData.total === "number") audience = suData.total;
+          } else {
+            const sres = await fetch(`/api/segments/${segIdNorm}`);
+            if (sres.ok) {
+              const sdoc = await sres.json();
+              if (typeof sdoc.audience_size === "number") audience = sdoc.audience_size;
+            }
           }
+        } catch (e) {
+          console.warn("Failed to fetch segment audience:", e);
         }
       }
 
@@ -186,7 +204,7 @@ export default function CampaignsList({
     } catch (err) {
       console.error("Preview failed:", err);
       setPreviewing(null);
-      alert("Failed to load preview: " + (err?.response?.data?.error || err?.message || err));
+      alert("Failed to load preview: " + (err.message || err));
     }
   };
 
@@ -222,11 +240,19 @@ export default function CampaignsList({
       const url = `${apiUrl}/${campaignId}`;
       const body = { segmentId: segId || "" };
 
-      await api.patch(url, body);
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `Status ${res.status}`);
+      }
 
       // refresh campaigns
-      const refreshedResp = await api.get(apiUrl);
-      const refreshed = refreshedResp.data;
+      const refreshed = await (await fetch(apiUrl)).json();
       const items = Array.isArray(refreshed)
         ? refreshed
         : refreshed.items || refreshed.campaigns || refreshed.data || [];
@@ -234,7 +260,7 @@ export default function CampaignsList({
       closeAttach();
     } catch (err) {
       console.error("Attach failed:", err);
-      alert("Attach failed: " + (err?.response?.data?.error || err?.message || err));
+      alert("Attach failed: " + String(err.message));
     } finally {
       setAttachLoading(false);
     }
