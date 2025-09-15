@@ -3,11 +3,10 @@
 // (e.g. [{ field, op, value }, ...]) and returns a Mongo query object.
 
 function normalizeOperator(op) {
-  // Accept both symbol tokens and mongo-style tokens ($gt, $lt, $eq, $contains)
-  if (!op && op !== 0) return undefined;
+  if (op === undefined || op === null) return undefined;
   if (typeof op !== 'string') op = String(op);
-
   const clean = op.trim();
+
   const mapDollarToSymbol = {
     '$gt': '>',
     '$lt': '<',
@@ -15,21 +14,38 @@ function normalizeOperator(op) {
     '$lte': '<=',
     '$eq': '=',
     '$ne': '!=',
-    '$contains': 'contains'
+    '$contains': 'contains',
+    '$in': 'IN'
   };
 
   if (clean.startsWith('$')) {
-    return mapDollarToSymbol[clean] ?? clean; // if unknown $token, return as-is
+    return mapDollarToSymbol[clean] ?? clean;
   }
 
-  // allow '==' -> '=' normalization
+  // common aliases
   if (clean === '==') return '=';
+  if (clean.toUpperCase() === 'COND') return 'COND';
+  if (clean.toLowerCase() === 'contains') return 'COND';
+  if (clean.toLowerCase() === 'in') return 'IN';
 
   return clean;
 }
 
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function maybeNumberForField(field, value) {
+  // if value is numeric-like and the field usually stores numbers, coerce
+  const numericFields = new Set(['total_spend', 'visits', 'last_active_days', 'last_purchase_amount', 'revenue']);
+  if (numericFields.has(field)) {
+    const n = Number(value);
+    if (!Number.isNaN(n)) return n;
+  }
+  return value;
+}
+
 function buildCond(cond) {
-  // cond may contain { field, operator, value } (operator could be '>' or '$gt')
   const f = cond.field;
   let op = cond.operator ?? cond.op ?? cond.operatorName ?? cond.opName;
   op = normalizeOperator(op);
@@ -38,6 +54,7 @@ function buildCond(cond) {
   if (!f) throw new Error('Condition missing field');
   if (!op) throw new Error('Unsupported operator: ' + String(op));
 
+  // special semantic: last_active_days is interpreted relative to now
   if (f === 'last_active_days') {
     const days = Number(v);
     if (Number.isNaN(days)) throw new Error('Invalid last_active_days value: ' + v);
@@ -45,9 +62,11 @@ function buildCond(cond) {
     switch (op) {
       case '>':
       case '>=':
+        // last_active_days > N => last_active_at older than cutoff => $lt cutoff
         return { last_active_at: { $lt: cutoff } };
       case '<':
       case '<=':
+        // last_active_days < N => last_active_at more recent than cutoff => $gt cutoff
         return { last_active_at: { $gt: cutoff } };
       case '=':
         return { last_active_at: { $lt: cutoff } };
@@ -56,51 +75,77 @@ function buildCond(cond) {
     }
   }
 
-  if (op === 'contains') {
-    if (typeof v !== 'string') throw new Error('contains requires string value');
-    return { [f]: { $regex: v, $options: 'i' } };
+  // COND / contains -> regex (case-insensitive) or $in if value is array-like
+  if (op === 'COND') {
+    // If v is an array (or JSON array string), use $in
+    try {
+      if (Array.isArray(v)) {
+        return { [f]: { $in: v } };
+      }
+      if (typeof v === 'string') {
+        const t = v.trim();
+        if (t.startsWith('[') && t.endsWith(']')) {
+          const parsed = JSON.parse(t);
+          if (Array.isArray(parsed)) return { [f]: { $in: parsed } };
+        }
+      }
+    } catch (e) {
+      // fall through to regex fallback
+    }
+
+    if (v === undefined || v === null) throw new Error('contains/COND requires a value');
+    const pattern = escapeRegex(String(v));
+    return { [f]: { $regex: pattern, $options: 'i' } };
   }
 
-  const mapOp = {
-    '>': '$gt', '<': '$lt', '>=': '$gte', '<=': '$lte', '=': '$eq', '!=': '$ne'
-  }[op];
+  // IN operator support (exact membership)
+  if (op === 'IN') {
+    // v must be array or JSON array string
+    if (Array.isArray(v)) return { [f]: { $in: v } };
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) return { [f]: { $in: parsed } };
+        } catch (e) {
+          // fallthrough
+        }
+      }
+    }
+    throw new Error('IN operator requires an array value');
+  }
+
+  const mapOp = { '>': '$gt', '<': '$lt', '>=': '$gte', '<=': '$lte', '=': '$eq', '!=': '$ne' }[op];
 
   if (!mapOp) throw new Error('Unsupported operator: ' + op);
 
-  const value = (f === 'total_spend' || f === 'visits') ? Number(v) : v;
+  const value = maybeNumberForField(f, v);
   return { [f]: { [mapOp]: value } };
 }
 
 function astToMongoQuery(ast) {
   if (!ast) return {};
 
-  // If the input is a plain array, we need to decide whether it's:
-  //  A) an array of plain rule objects like { field, op, value }
-  //  B) an array of AST-node objects like { op: 'COND', field, operator, value }
+  // If the input is a plain array, convert to AST-like structure
   if (Array.isArray(ast)) {
-    // quick check: if first item looks like an AST node, treat whole array as AST children
     const first = ast[0];
     const looksLikeAstNode = first && typeof first === 'object' && typeof first.op === 'string' &&
       (first.op === 'COND' || first.op === 'AND' || first.op === 'OR');
 
     if (looksLikeAstNode) {
-      // If array already contains AST nodes, wrap them in AND if multiple
       ast = ast.length === 1 ? ast[0] : { op: 'AND', children: ast };
     } else {
-      // convert plain rules array into AST children
       const children = ast.map((r) => {
-        // r may be { field, op, value } or { field, operator, value } or include mongoOp ($gt)
-        // be defensive: if r.op === 'COND' but it also has `operator`, use operator.
+        // determine operator token from several possible properties
         let operator;
-        if (r && r.op === 'COND') {
-          // weird shape: prefer explicit operator or mongoOp if present
-          operator = r.operator ?? r.mongoOp ?? r.operatorName ?? r.opName;
+        if (r && (r.op === 'COND' || (r.operator && String(r.operator).toLowerCase() === 'contains'))) {
+          operator = r.operator ?? r.mongoOp ?? r.op ?? r.operatorName ?? r.opName;
         } else {
           operator = r.operator ?? r.op ?? r.mongoOp ?? r.operatorName ?? r.opName;
         }
         return { op: 'COND', field: r.field, operator: operator, value: r.value ?? r.val ?? r.v };
       });
-      // Wrap as AND node if multiple, or return single COND node
       ast = children.length === 1 ? children[0] : { op: 'AND', children };
     }
   }
@@ -109,7 +154,7 @@ function astToMongoQuery(ast) {
     if (!node) return {};
     if (node.op === 'COND') return buildCond(node);
     if (node.op === 'AND' || node.op === 'OR') {
-      const parts = (node.children || []).map(rec).filter(Boolean);
+      const parts = (node.children || []).map(rec).filter(p => p && Object.keys(p).length);
       if (parts.length === 0) return {};
       return node.op === 'AND' ? { $and: parts } : { $or: parts };
     }
