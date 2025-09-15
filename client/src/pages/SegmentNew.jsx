@@ -2,17 +2,13 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api"; // use centralized axios instance
 import { useNavigate } from "react-router-dom";
-import NLToRules from "../components/NLToRules"; // <-- added import
+import NLToRules from "../components/NLToRules"; // <-- AI helper component
 
 /**
- * SegmentNew - robust "New Segment" UI.
- * - Tries GET templateUrl for a template (safe if backend returns 400/404)
- * - Falls back to a blank form if template load fails
- * - Posts to /api/segments to save
- *
- * Notes:
- * - Keeps your inline styling intact.
- * - Ensures rules always have a defined `op` before sending.
+ * SegmentNew - New Segment UI with AI rule import.
+ * - Loads optional template
+ * - Accepts AI-produced rules via NLToRules -> handleAIApply
+ * - Sends rules shaped to backend expectations (op = operator token)
  */
 
 export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
@@ -88,10 +84,10 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
   }
 
   // ---------------------------
-  // NEW: handler for AI output
-  // Accepts object from NLToRules onApply: { ast, internalRules }
+  // AI output handler
+  // Accepts { ast, internalRules } from NLToRules onApply
   // internalRules are expected like: { op: "COND", field: "...", operator: "<", value: "..." }
-  // We map that into the local `rules` state shape: { id, field, op, value }
+  // We map into local rules: { id, field, op, value }
   // ---------------------------
   function handleAIApply({ ast: aiAst, internalRules: aiInternalRules }) {
     try {
@@ -101,7 +97,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
       if (!Array.isArray(aiInternalRules) || aiInternalRules.length === 0) return;
 
       const mapped = aiInternalRules.map((r, idx) => {
-        // prefer r.operator (like '<', '>', 'between'), fallback to r.op if it contains operator token
+        // prefer r.operator (like '<', '>', 'between'), fallback to r.op if it's not "COND"
         const opCandidate = r.operator ?? (typeof r.op === "string" && r.op !== "COND" ? r.op : null);
         const op = opCandidate ?? ">"; // fallback
         return {
@@ -119,12 +115,9 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     }
   }
 
-  // Helper to clean and validate rules before sending
-
+  // Validate & normalize form rules before sending
   function getCleanRules() {
-    // Allowed ops your frontend uses; map to backend tokens here if needed
-    const allowedOps = new Set([">", "<", ">=", "<=", "=", "==", "!=", "contains"]);
-    // If your backend expects different operator tokens (e.g. "$gt"), convert here:
+    const allowedOps = new Set([">", "<", ">=", "<=", "=", "==", "!=", "contains", "between"]);
     const opMap = {
       ">": ">",
       "<": "<",
@@ -134,21 +127,20 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
       "==": "=",
       "!=": "!=",
       contains: "contains",
+      between: "between",
     };
 
     const cleaned = rules
       .map((r) => {
         const field = String(r?.field ?? "").trim();
-        // fallback op to ">" if missing
         let opRaw = r?.op ?? ">";
-        // normalize common variants
         if (opRaw === null) opRaw = ">";
         if (opRaw === "==") opRaw = "=";
         const op = String(opRaw).trim();
         let value = r?.value ?? "";
-        if (typeof value === 'string') value = value.trim();
+        if (typeof value === "string") value = value.trim();
 
-        // --- Special normalization for email contains ---
+        // email contains normalization
         if (field.toLowerCase() === "email" && op.toLowerCase() === "contains") {
           const atIndex = value.indexOf("@");
           if (atIndex !== -1) {
@@ -157,28 +149,23 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
             value = value.slice(1).trim();
           }
           const dotIndex = value.indexOf(".");
-          if (dotIndex !== -1) {
-            value = value.slice(dotIndex);
-          } else {
-            value = value;
-          }
+          if (dotIndex !== -1) value = value.slice(dotIndex);
         }
 
-        // coerce numeric-like fields to numbers when possible
-        if (field === 'visits' || field === 'total_spend' || field === 'avg_order_value') {
+        // coerce numeric fields to numbers when possible
+        if (field === "visits" || field === "total_spend" || field === "avg_order_value") {
           if (value === "" || value == null) {
-            // keep as-is
+            // no-op
           } else {
-            const n = Number(String(value).replace(/,/g, ''));
+            const n = Number(String(value).replace(/,/g, ""));
             if (!Number.isNaN(n)) value = n;
           }
         }
 
         return { field, op, value };
       })
-      .filter((r) => r.field !== "" && String(r.value) !== ""); // require both field and value
+      .filter((r) => r.field !== "" && String(r.value) !== "");
 
-    // Validate ops and map them to final token
     for (const r of cleaned) {
       if (!allowedOps.has(r.op)) {
         console.error("Invalid op detected for rule:", r);
@@ -190,7 +177,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     return cleaned;
   }
 
-  // ---- FIXED handleSave: builds payload before using it, coerces numbers, op: "COND" ----
+  // ---- handleSave: send rules with op as operator token (backend expects this) ----
   async function handleSave(e) {
     e?.preventDefault?.();
     const trimmedName = String(name || "").trim();
@@ -215,30 +202,17 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     try {
       setSaving(true);
 
-      // Defensive mapping to cover multiple server expectations
-      const opToMongo = {
-        ">": "$gt",
-        "<": "$lt",
-        ">=": "$gte",
-        "<=": "$lte",
-        "=": "$eq",
-        "==": "$eq",
-        "!=": "$ne",
-        contains: "$contains",
-      };
-
-      // Build a flat rules array (not AST). Ensure backend-friendly shape:
-      // Each rule will be { field, value, op: "COND", operator: "<|>|=|between", ... }
+      // Build the flat rules expected by your backend (op is the operator token)
       const flatRules = cleanedRules.map((r) => {
         const normalizedOp = r.op === "==" ? "=" : r.op;
 
-        // value already coerced in getCleanRules when appropriate, but double-check
+        // coerce numeric fields to numbers when possible (double-check)
         let value = r.value;
-        if (r.field === 'visits' || r.field === 'total_spend' || r.field === 'avg_order_value') {
-          if (value === '' || value == null) {
+        if (r.field === "visits" || r.field === "total_spend" || r.field === "avg_order_value") {
+          if (value === "" || value == null) {
             value = value;
           } else {
-            const n = Number(String(value).replace(/,/g, ''));
+            const n = Number(String(value).replace(/,/g, ""));
             value = Number.isNaN(n) ? value : n;
           }
         }
@@ -246,13 +220,11 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         return {
           field: r.field,
           value,
-          op: "COND",              // important: backend expects op: "COND"
-          operator: normalizedOp,  // actual comparison token
-          mongoOp: opToMongo[normalizedOp] ?? normalizedOp,
+          op: normalizedOp,         // <-- operator token expected by server (">", "<", "between", "=")
+          operator: normalizedOp,   // <-- alias for compatibility (optional)
         };
       });
 
-      // Build payload and log it (so you can see what is being sent)
       const payload = {
         name: trimmedName,
         rules: flatRules,
