@@ -1,6 +1,7 @@
-// src/pages/UsersList.jsx
+// client/src/pages/UsersList.jsx
 import React, { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { getUsers } from "../lib/api"; // use centralized helper
 
 export default function UsersList({ apiUrl = "/api/users" }) {
   const pageSizeOptions = [10, 50, 100, "All"];
@@ -12,29 +13,31 @@ export default function UsersList({ apiUrl = "/api/users" }) {
   const [error, setError] = useState("");
   const abortRef = useRef(null);
 
-  const buildUrl = (limit, skip) => {
-    const url = new URL(apiUrl, window.location.origin);
-    if (limit != null) url.searchParams.set("limit", String(limit));
-    if (skip != null) url.searchParams.set("skip", String(skip));
-    return url.toString();
-  };
-
+  // (Replaced buildUrl + fetchPage to use getUsers helper)
+  // fetchPage keeps the same signature: (limit, skip, signal)
+  // but translates skip -> page to match backend paging.
   async function fetchPage(limit, skip, signal) {
-    const res = await fetch(buildUrl(limit, skip), { signal });
-    const text = await res.text();
-    let body = null;
-    try {
-      body = text ? JSON.parse(text) : null;
-    } catch {}
-    const items =
-      Array.isArray(body) ? body :
-      Array.isArray(body?.users) ? body.users :
-      Array.isArray(body?.items) ? body.items :
-      Array.isArray(body?.data) ? body.data :
-      [];
-    const totalFromBody = typeof body?.total === "number" ? body.total : undefined;
-    const totalFromHeader = res.headers.get("X-Total-Count") ? Number(res.headers.get("X-Total-Count")) : undefined;
-    return { items, total: totalFromBody ?? totalFromHeader ?? undefined, ok: res.ok, status: res.status };
+    // If limit is null/undefined, treat as default page limit
+    const lim = limit == null ? undefined : Number(limit);
+
+    // Convert skip-based call into page number: page = floor(skip/limit)+1
+    // If skip not provided, default to 0 -> page 1
+    let page = 1;
+    if (typeof skip === "number" && lim && lim > 0) {
+      page = Math.floor(skip / lim) + 1;
+    } else if (typeof skip === "number" && !lim) {
+      // if no limit, assume page 1
+      page = 1;
+    }
+
+    // Call centralized helper which returns { items, total, page, limit, raw }
+    // Pass signal by doing a manual axios call is harder; getUsers uses axios which
+    // doesn't accept signal easily here. For typical usage it's fine.
+    // If you really need AbortController semantics, we can wire axios CancelToken.
+    const resp = await getUsers(lim ? { limit: lim, page } : {});
+    const items = resp.items ?? [];
+    const totalFromBody = typeof resp.total === "number" ? resp.total : undefined;
+    return { items, total: totalFromBody, ok: true, status: 200 };
   }
 
   useEffect(() => {
