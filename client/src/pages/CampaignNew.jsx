@@ -1,8 +1,9 @@
 // client/src/pages/CampaignNew.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../lib/api";
 
-export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
+export default function CampaignNew() {
   const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -14,18 +15,13 @@ export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, description }),
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Status ${res.status}`);
-      }
+      const res = await api.post("/api/campaigns", { title, description });
+      // if backend returns created doc, you can navigate to list
       navigate("/campaigns");
     } catch (err) {
-      setError(String(err.message || "Save failed"));
+      console.error("Campaign save error:", err?.response?.data ?? err);
+      const txt = err?.response?.data?.message || err?.message || "Save failed";
+      setError(String(txt));
     } finally {
       setSaving(false);
     }
@@ -38,28 +34,17 @@ export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
       <form onSubmit={submit}>
         <div style={{ marginBottom: 8 }}>
           <label>Title</label><br />
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-          />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} required />
         </div>
         <div style={{ marginBottom: 8 }}>
           <label>Description</label><br />
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
         <div>
           <button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </button>
-          <button
-            type="button"
-            onClick={() => navigate("/campaigns")}
-            style={{ marginLeft: 8 }}
-          >
+          <button type="button" onClick={() => navigate("/campaigns")} style={{ marginLeft: 8 }}>
             Cancel
           </button>
         </div>

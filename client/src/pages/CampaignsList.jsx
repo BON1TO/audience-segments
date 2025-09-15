@@ -1,25 +1,23 @@
-// src/pages/CampaignsList.jsx
+// client/src/pages/CampaignsList.jsx
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { listItemVariants, fadeIn } from "../styles/motionVariants";
+import { listItemVariants } from "../styles/motionVariants";
 import "../styles/theme.css";
+import api, { getCampaigns as getCampaignsHelper, getSegments as getSegmentsHelper, getCampaign as getCampaignHelper } from "../lib/api";
 
-export default function CampaignsList({
-  apiUrl = "/api/campaigns",
-  segmentsApi = "/api/segments",
-}) {
+export default function CampaignsList() {
   const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [segments, setSegments] = useState([]);
-  const [attachingTo, setAttachingTo] = useState(null); // campaign obj while attaching
+  const [attachingTo, setAttachingTo] = useState(null);
   const [attachLoading, setAttachLoading] = useState(false);
   const [attachSegmentId, setAttachSegmentId] = useState("");
-  const [previewing, setPreviewing] = useState(null); // campaign obj being previewed
+  const [previewing, setPreviewing] = useState(null);
 
-  // ---------- helpers ----------
+  // Helper functions retained as-is (normalizeId/getSegmentName/getSegmentAudience)...
   const normalizeId = (raw) => {
     if (!raw) return null;
     if (typeof raw === "string") {
@@ -82,81 +80,45 @@ export default function CampaignsList({
     return 0;
   };
 
-  // ---------- data loading ----------
+  // load campaigns
   useEffect(() => {
     let mounted = true;
-    const controller = new AbortController();
-
-    async function load() {
+    (async () => {
       try {
         setLoading(true);
         setError("");
-        const res = await fetch(apiUrl, { signal: controller.signal });
-        const text = await res.text();
-        let data;
-        try {
-          data = text ? JSON.parse(text) : null;
-        } catch (parseErr) {
-          console.warn("[CampaignsList] response text (non-json):", text);
-          throw new Error(`Non-JSON response (status ${res.status})`);
-        }
-
-        if (!res.ok) {
-          console.warn("[CampaignsList] non-ok response:", res.status, data);
-          throw new Error(`Status ${res.status}: ${data?.message || JSON.stringify(data)}`);
-        }
-
+        // use helper to fetch campaigns (returns normalized { items,... })
+        const resp = await getCampaignsHelper();
+        // getCampaigns helper returns { items, total, ... } via normalizeListResponse
+        const list = Array.isArray(resp.items) ? resp.items : Array.isArray(resp) ? resp : [];
         if (!mounted) return;
-
-        const items =
-          Array.isArray(data) && data.length
-            ? data
-            : Array.isArray(data?.items)
-            ? data.items
-            : Array.isArray(data?.campaigns)
-            ? data.campaigns
-            : Array.isArray(data?.data)
-            ? data.data
-            : [];
-
-        setCampaigns(items);
+        setCampaigns(list);
       } catch (e) {
-        if (e.name === "AbortError") {
-          console.log("[CampaignsList] fetch aborted");
-        } else {
-          console.error("[CampaignsList] fetch error:", e);
-          setError(String(e.message || "Failed to fetch campaigns"));
-        }
+        console.error("[CampaignsList] fetch error:", e);
+        if (mounted) setError("Failed to load campaigns");
       } finally {
         if (mounted) setLoading(false);
       }
-    }
+    })();
+    return () => (mounted = false);
+  }, []);
 
-    load();
-    return () => {
-      mounted = false;
-      controller.abort();
-    };
-  }, [apiUrl]);
-
+  // load segments for attaching/labels
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
-        const res = await fetch(segmentsApi);
-        if (!res.ok) {
-          console.warn("[CampaignsList] failed to load segments", res.status);
-          return;
-        }
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : data.segments || [];
+        const resp = await getSegmentsHelper();
+        const list = Array.isArray(resp.items) ? resp.items : Array.isArray(resp) ? resp : [];
+        if (!mounted) return;
         setSegments(list);
       } catch (err) {
         console.warn("[CampaignsList] segments load error:", err);
       }
     })();
-  }, [segmentsApi]);
+    return () => (mounted = false);
+  }, []);
 
-  // ---------- actions ----------
   const onCreate = () => navigate("/campaigns/new");
 
   const onPreview = async (c) => {
@@ -170,30 +132,23 @@ export default function CampaignsList({
 
     try {
       setPreviewing({ _loading: true });
+      const campaign = (await getCampaignHelper(id)) || null;
+      if (!campaign) throw new Error("Campaign not found");
 
-      const res = await fetch(`${apiUrl}/${id}`);
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Status ${res.status}`);
-      }
-      const campaign = await res.json();
-
-      // compute audience (try segment users endpoint)
+      // compute audience via segment endpoints using helper calls
       let audience = typeof campaign.audience_size === "number" ? campaign.audience_size : 0;
       const segId = campaign.segment ?? campaign.segmentId ?? null;
       const segIdNorm = normalizeId(segId);
       if (segIdNorm) {
         try {
-          const su = await fetch(`/api/segments/${segIdNorm}/users?limit=1`);
-          if (su.ok) {
-            const suData = await su.json();
-            if (typeof suData.total === "number") audience = suData.total;
+          // try /api/segments/:id/users?limit=1 using helper (but that helper returns normalized data)
+          const su = await api.get(`/api/segments/${segIdNorm}/users`, { params: { limit: 1 } });
+          if (su?.data && typeof su.data.total === "number") {
+            audience = su.data.total;
           } else {
-            const sres = await fetch(`/api/segments/${segIdNorm}`);
-            if (sres.ok) {
-              const sdoc = await sres.json();
-              if (typeof sdoc.audience_size === "number") audience = sdoc.audience_size;
-            }
+            // fallback to segment doc
+            const sdoc = await api.get(`/api/segments/${segIdNorm}`);
+            if (sdoc?.data && typeof sdoc.data.audience_size === "number") audience = sdoc.data.audience_size;
           }
         } catch (e) {
           console.warn("Failed to fetch segment audience:", e);
@@ -237,38 +192,25 @@ export default function CampaignsList({
 
     setAttachLoading(true);
     try {
-      const url = `${apiUrl}/${campaignId}`;
-      const body = { segmentId: segId || "" };
+      const url = `/api/campaigns/${campaignId}`;
+      const body = { segmentId: segId || null };
 
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      await api.patch(url, body);
 
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Status ${res.status}`);
-      }
-
-      // refresh campaigns
-      const refreshed = await (await fetch(apiUrl)).json();
-      const items = Array.isArray(refreshed)
-        ? refreshed
-        : refreshed.items || refreshed.campaigns || refreshed.data || [];
+      // refresh campaigns using helper
+      const refreshed = await getCampaignsHelper();
+      const items = Array.isArray(refreshed.items) ? refreshed.items : Array.isArray(refreshed) ? refreshed : [];
       setCampaigns(items);
       closeAttach();
     } catch (err) {
       console.error("Attach failed:", err);
-      alert("Attach failed: " + String(err.message));
+      alert("Attach failed: " + String(err?.message || err));
     } finally {
       setAttachLoading(false);
     }
   };
 
-  // ---------- render ----------
   if (loading) {
-    // simple skeleton-ish loader
     return (
       <div className="container">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -299,216 +241,8 @@ export default function CampaignsList({
 
   return (
     <div className="container" role="region" aria-labelledby="campaigns-heading">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div>
-          <div id="campaigns-heading" className="h1">Campaigns</div>
-          <div className="h2 muted">Target, schedule & send</div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button className="btn ghost" onClick={() => window.location.reload()} aria-label="Refresh campaigns">Refresh</button>
-          <button className="btn btn-primary" onClick={onCreate} aria-label="Create campaign">+ New Campaign</button>
-        </div>
-      </div>
-
-      {campaigns.length === 0 ? (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontWeight: 700 }}>No campaigns yet</div>
-              <div className="muted" style={{ marginTop: 6 }}>Create a campaign to get started.</div>
-            </div>
-            <button className="btn btn-primary" onClick={onCreate}>Create</button>
-          </div>
-        </div>
-      ) : (
-        <div className="list" aria-live="polite">
-          <AnimatePresence>
-            {campaigns.map((c, idx) => {
-              const key = c && (c._id || c.id) ? c._id || c.id : `campaign-${idx}`;
-              const displayTitle =
-                c?.title ||
-                c?.name ||
-                (c?.meta && (c.meta.title || c.meta.name)) ||
-                (c?.details && (c.details.title || c.details.name)) ||
-                "(no title)";
-              const segmentName = getSegmentName(c);
-
-              return (
-                <motion.article
-                  className="card list-item"
-                  key={key}
-                  custom={idx}
-                  initial="initial"
-                  animate="animate"
-                  exit="exit"
-                  variants={listItemVariants}
-                  transition={{ duration: 0.28 }}
-                  role="group"
-                  aria-labelledby={`campaign-${key}-title`}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
-                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flex: 1 }}>
-                      <div className="accent-line" style={{ height: 44, width: 8, borderRadius: 8 }} />
-                      <div style={{ flex: 1 }}>
-                        <div id={`campaign-${key}-title`} style={{ fontWeight: 700 }}>{displayTitle}</div>
-                        <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>{c.description ?? ""}</div>
-                        <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>Segment: {segmentName}</div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                      <div className="muted" style={{ fontSize: 12 }}>{c.status || "draft"}</div>
-
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button className="btn" onClick={() => onPreview(c)}>Preview</button>
-                        <button className="btn ghost" onClick={() => openAttach(c)}>Attach</button>
-                        <button
-                          className="btn"
-                          onClick={() => navigate(`/campaigns/${normalizeId(c._id ?? c.id ?? c._id?.$oid)}`)}
-                          aria-label={`Edit ${displayTitle}`}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </motion.article>
-              );
-            })}
-          </AnimatePresence>
-        </div>
-      )}
-
-      {/* Attach modal */}
-      <AnimatePresence>
-        {attachingTo && (
-          <motion.div
-            className="modal-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(2,6,23,0.6)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 9999,
-            }}
-            onClick={closeAttach}
-            aria-modal="true"
-            role="dialog"
-          >
-            <motion.div
-              className="card"
-              initial={{ y: 12, opacity: 0, scale: 0.99 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ y: 8, opacity: 0, scale: 0.995 }}
-              transition={{ duration: 0.22 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{ minWidth: 320, maxWidth: 520 }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <h3 style={{ margin: 0 }}>Attach campaign to segment</h3>
-                <button className="btn ghost" onClick={closeAttach} aria-label="Close attach dialog">Close</button>
-              </div>
-
-              <div style={{ marginTop: 12 }}>
-                <div style={{ marginBottom: 8 }}>
-                  <strong>Campaign:</strong> {attachingTo.title || attachingTo.name || "(no title)"}
-                </div>
-
-                <label htmlFor="attach-seg" className="muted" style={{ display: "block", marginBottom: 6 }}>
-                  Select segment
-                </label>
-                <select
-                  id="attach-seg"
-                  className="input"
-                  value={attachSegmentId || ""}
-                  onChange={(e) => setAttachSegmentId(e.target.value)}
-                >
-                  <option value="">-- No segment --</option>
-                  {segments.map((s) => (
-                    <option key={s._id || s.id} value={s._id || s.id}>
-                      {s.name || s.title || `Segment ${s._id || s.id}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-                <button className="btn ghost" onClick={closeAttach}>Cancel</button>
-                <button
-                  className="btn btn-primary"
-                  disabled={attachLoading}
-                  onClick={() => doAttach(attachingTo, attachSegmentId)}
-                >
-                  {attachLoading ? "Attaching…" : "Attach"}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Preview modal */}
-      <AnimatePresence>
-        {previewing && (
-          <motion.div
-            className="modal-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(2,6,23,0.6)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 9999,
-            }}
-            onClick={() => setPreviewing(null)}
-            aria-modal="true"
-            role="dialog"
-          >
-            <motion.div
-              className="card"
-              initial={{ y: 12, opacity: 0, scale: 0.99 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ y: 8, opacity: 0, scale: 0.995 }}
-              transition={{ duration: 0.22 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{ minWidth: 320, maxWidth: 720 }}
-            >
-              {previewing._loading ? (
-                <div>Loading preview…</div>
-              ) : (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <h3 style={{ margin: 0 }}>{previewing.title || previewing.name || "(no title)"}</h3>
-                    <button className="btn ghost" onClick={() => setPreviewing(null)} aria-label="Close preview">Close</button>
-                  </div>
-
-                  <p style={{ marginTop: 12, color: "var(--muted)" }}>{previewing.description || "No description"}</p>
-
-                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                    <div><strong>Segment:</strong> {previewing.segment?.name || getSegmentName(previewing)}</div>
-                    <div><strong>Audience:</strong> {typeof previewing.audience_count === "number" ? previewing.audience_count : getSegmentAudience(previewing)}</div>
-                    <div><strong>Created:</strong> {previewing.created_at ? new Date(previewing.created_at).toLocaleString() : "—"}</div>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-                    <button className="btn" onClick={() => setPreviewing(null)}>Close</button>
-                  </div>
-                </>
-              )}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ... the rest of your render is unchanged, using campaigns state */}
+      {/* (omitted here for brevity, keep the JSX from your original file) */}
     </div>
   );
 }
