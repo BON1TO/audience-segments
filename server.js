@@ -26,10 +26,8 @@ async function start(){
   const app = express();
   const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 
-  app.use(cors({
-    origin: FRONTEND_ORIGIN,  // your React dev server
-    credentials: true         // allow cookies / Authorization headers
-  }));
+  app.use(cors({ origin: "*"}));
+
 
   app.use(bodyParser.json());
   const fs = require('fs');
