@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api"; // use centralized axios instance
 import { useNavigate } from "react-router-dom";
+import NLToRules from "../components/NLToRules"; // <-- added import
 
 /**
  * SegmentNew - robust "New Segment" UI.
@@ -86,8 +87,40 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     setRules((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  // ---------------------------
+  // NEW: handler for AI output
+  // Accepts object from NLToRules onApply: { ast, internalRules }
+  // internalRules are expected like: { op: "COND", field: "...", operator: "<", value: "..." }
+  // We map that into the local `rules` state shape: { id, field, op, value }
+  // ---------------------------
+  function handleAIApply({ ast: aiAst, internalRules: aiInternalRules }) {
+    try {
+      if (aiAst?.name_suggestion) {
+        setName(String(aiAst.name_suggestion));
+      }
+      if (!Array.isArray(aiInternalRules) || aiInternalRules.length === 0) return;
+
+      const mapped = aiInternalRules.map((r, idx) => {
+        // prefer r.operator (like '<', '>', 'between'), fallback to r.op if it contains operator token
+        const opCandidate = r.operator ?? (typeof r.op === "string" && r.op !== "COND" ? r.op : null);
+        const op = opCandidate ?? ">"; // fallback
+        return {
+          id: r.id ?? `ai-${Date.now()}-${idx}`,
+          field: r.field ?? "",
+          op,
+          value: r.value ?? "",
+        };
+      });
+
+      // Replace current rules with AI-produced rules (user can still edit)
+      setRules(mapped);
+    } catch (e) {
+      console.error("Failed to apply AI rules:", e);
+    }
+  }
+
   // Helper to clean and validate rules before sending
-    
+
   function getCleanRules() {
     // Allowed ops your frontend uses; map to backend tokens here if needed
     const allowedOps = new Set([">", "<", ">=", "<=", "=", "==", "!=", "contains"]);
@@ -158,7 +191,6 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
 
     return cleaned;
   }
-
 
   async function handleSave(e) {
     e?.preventDefault?.();
@@ -249,6 +281,12 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
           Template load error: {error}. You can still create a segment below.
         </div>
       ) : null}
+
+      {/* AI assistant block */}
+      <NLToRules
+        availableFields={["last_purchase_date", "total_spend", "visits", "avg_order_value", "city", "signup_date"]}
+        onApply={handleAIApply}
+      />
 
       <form onSubmit={handleSave}>
         <div style={{ marginBottom: 12 }}>

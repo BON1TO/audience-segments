@@ -10,6 +10,7 @@ const { MongoClient, ObjectId } = require('mongodb');
 const { astToMongoQuery } = require('./rulesToMongo');
 const fs = require('fs');
 const path = require('path');
+const nl2rules = require('./routes/nl2rules');
 
 // Routers
 const usersRouter = require('./routes/users');
@@ -119,6 +120,7 @@ async function start() {
   app.use('/api/users', usersRouter);
   app.use('/api/segments', segmentsRouter);
   app.use('/api/campaigns', campaignsRouter);
+  app.use('/api/nl2rules', nl2rules);
 
   // JSON 404 for unknown API routes
   app.use('/api', (req, res) => res.status(404).json({ error: 'API route not found', path: req.path }));
