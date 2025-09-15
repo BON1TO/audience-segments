@@ -177,7 +177,16 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         };
       });
 
-      const payload = { name: trimmedName, rules: mappedRules };
+      const payload = {
+  name: trimmedName,
+  rules: mappedRules.map(r => ({
+    op: "COND",
+    field: r.field,
+    operator: r.op,   // use r.op as operator
+    value: r.value
+  }))
+};
+
 
       // DEBUG: log payload so you can inspect what is actually being sent
       console.log("Segment save payload:", JSON.stringify(payload, null, 2));
