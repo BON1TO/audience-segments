@@ -1,18 +1,15 @@
 // client/src/lib/api.js
+// client/src/lib/api.js
 import axios from "axios";
 
-// ✅ Hardcode backend URL for production, fallback to localhost for dev
-const BASE =
-  import.meta.env?.VITE_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname.includes("onrender.com")
-    ? "https://audience-segments.onrender.com"
-    : "http://localhost:4000");
+// 🔒 Hardcode backend API URL (always absolute)
+const BASE = "https://audience-segments.onrender.com";
 
-console.log("API Base URL:", BASE); // Debug log, remove later if you want
+console.log("API Base URL:", BASE);
 
 const api = axios.create({
   baseURL: BASE,
-  withCredentials: false, // false since you don’t use cookies
+  withCredentials: false,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -23,7 +20,7 @@ function normalizeListResponse(resp, defaultPage = 1, defaultLimit = 50) {
   if (Array.isArray(data)) items = data;
   else items = data.items ?? data.users ?? data.segments ?? [];
 
-  const total = data.total ?? (Array.isArray(data) ? items.length : items.length);
+  const total = data.total ?? items.length;
   const page = data.page ?? defaultPage;
   const limit = data.limit ?? defaultLimit;
 
