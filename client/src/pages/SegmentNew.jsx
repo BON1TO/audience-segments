@@ -128,7 +128,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     return cleaned;
   }
 
-    async function handleSave(e) {
+  async function handleSave(e) {
     e?.preventDefault?.();
     const trimmedName = String(name || "").trim();
     if (!trimmedName) {
@@ -171,39 +171,17 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         return {
           field: r.field,
           value: r.value,
-          op: normalizedOp,        // e.g. ">"
-          operator: normalizedOp,  // alias backend might look for
+          op: normalizedOp, // e.g. ">"
+          operator: normalizedOp, // alias backend might look for
           mongoOp: opToMongo[normalizedOp] ?? normalizedOp, // e.g. "$lt"
         };
       });
 
-      const payload = { name: trimmedName, rules: flatRules };
-
-      // DEBUG: log payload so you can inspect what is actually being sent
-      console.log("Segment save payload:", JSON.stringify(payload, null, 2));
-
-      // Post to your API (server expects name + rules)
-      const res = await api.post("/api/segments", payload);
-      const saved = res.data;
-      alert("Segment saved");
-
-      // Prefer navigating to detail if backend returned an id, otherwise go to list
-      if (saved && (saved._id || saved.id)) {
-        const id = saved._id ?? saved.id;
-        navigate(`/segments/${id}`);
-      } else {
-        navigate("/segments");
-      }
-    } catch (err) {
-      console.error("Save error:", err?.response?.data ?? err.message);
-      const msg = err?.response?.data?.message ?? JSON.stringify(err?.response?.data) ?? err?.message ?? "Save failed";
-      alert("Save failed: " + msg);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-
+      // Build payload using flat rules (no AST wrapper)
+      const payload = {
+        name: trimmedName,
+        rules: flatRules,
+      };
 
       // DEBUG: log payload so you can inspect what is actually being sent
       console.log("Segment save payload:", JSON.stringify(payload, null, 2));
