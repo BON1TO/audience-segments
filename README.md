@@ -42,31 +42,19 @@ The system translates this into structured rules and MongoDB queries, calculates
 ## 🚀 API Endpoints
 
 GET    /api/health           → { "ok": true }
+
 GET    /api/segments         # List segments
+
 GET    /api/segments/new     # Template for new segment
+
 POST   /api/segments         # Create new segment
+
 GET    /api/segments/:id     # Get segment by ID
+
 GET    /api/segments/:id/users # Get users inside segment
 
 
 
-audience-segments/
-├── server/
-│   ├── routes/
-│   │   ├── users.js
-│   │   ├── segments.js
-│   │   ├── campaigns.js
-│   │   └── nl2rules.js       # AI assistant
-│   ├── rulesToMongo.js       # Rule → Mongo conversion
-│   └── server.js             # Express app
-└── client/
-    ├── src/
-    │   ├── pages/
-    │   │   ├── SegmentNew.jsx   # New Segment UI
-    │   │   └── CampaignsList.jsx
-    │   └── components/
-    │       └── NLToRules.jsx    # AI Assistant UI
-    └── package.json
 
 
 
