@@ -108,7 +108,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
           id: r.id ?? `ai-${Date.now()}-${idx}`,
           field: r.field ?? "",
           op,
-          value: r.value ?? "",
+          value: r.value ?? (r.value_relative ?? ""),
         };
       });
 
@@ -145,40 +145,38 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         if (opRaw === null) opRaw = ">";
         if (opRaw === "==") opRaw = "=";
         const op = String(opRaw).trim();
-        let value = String(r?.value ?? "").trim();
+        let value = r?.value ?? "";
+        if (typeof value === 'string') value = value.trim();
 
         // --- Special normalization for email contains ---
-        // If user is building a "contains" rule on the email field, normalize common inputs:
-        // - "user@gmail.com"  -> ".com"
-        // - "@gmail.com"      -> ".com"
-        // - "gmail.com"       -> ".com"
-        // - "example.com"     -> ".com"
-        //
-        // The rule: if field === 'email' and op === 'contains', and value contains '@' or a dot,
-        // keep only the suffix starting from the first dot (so "gmail.com" -> ".com",
-        // "example.co.in" -> ".co.in"). If no dot, leave value as-is.
         if (field.toLowerCase() === "email" && op.toLowerCase() === "contains") {
-          // remove leading/trailing whitespace and any leading @ or username@
-          // e.g. "user@gmail.com" -> "gmail.com", "@gmail.com" -> "gmail.com"
           const atIndex = value.indexOf("@");
           if (atIndex !== -1) {
             value = value.slice(atIndex + 1).trim();
           } else if (value.startsWith("@")) {
             value = value.slice(1).trim();
           }
-          // if there is a dot in the remaining value, keep only from the first dot to the end
           const dotIndex = value.indexOf(".");
           if (dotIndex !== -1) {
-            value = value.slice(dotIndex); // includes the leading dot, e.g. ".com" or ".co.in"
+            value = value.slice(dotIndex);
           } else {
-            // no dot — leave as-is (user might intentionally search for a substring)
             value = value;
+          }
+        }
+
+        // coerce numeric-like fields to numbers when possible
+        if (field === 'visits' || field === 'total_spend' || field === 'avg_order_value') {
+          if (value === "" || value == null) {
+            // keep as-is
+          } else {
+            const n = Number(String(value).replace(/,/g, ''));
+            if (!Number.isNaN(n)) value = n;
           }
         }
 
         return { field, op, value };
       })
-      .filter((r) => r.field !== "" && r.value !== ""); // require both field and value
+      .filter((r) => r.field !== "" && String(r.value) !== ""); // require both field and value
 
     // Validate ops and map them to final token
     for (const r of cleaned) {
@@ -192,6 +190,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     return cleaned;
   }
 
+  // ---- FIXED handleSave: builds payload before using it, coerces numbers, op: "COND" ----
   async function handleSave(e) {
     e?.preventDefault?.();
     const trimmedName = String(name || "").trim();
@@ -228,30 +227,36 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         contains: "$contains",
       };
 
-      // Build a flat rules array (not AST). This is the important change:
-      // -> send plain rule objects so backend's normalization can prefer r.operator or r.op
-      // Build a flat rules array (not AST). Ensure backend-friendly shape
-const flatRules = cleanedRules.map((r) => {
-  const normalizedOp = r.op === "==" ? "=" : r.op;
+      // Build a flat rules array (not AST). Ensure backend-friendly shape:
+      // Each rule will be { field, value, op: "COND", operator: "<|>|=|between", ... }
+      const flatRules = cleanedRules.map((r) => {
+        const normalizedOp = r.op === "==" ? "=" : r.op;
 
-  // coerce numeric fields to numbers when possible
-  let value = r.value;
-  if (r.field === 'visits' || r.field === 'total_spend' || r.field === 'avg_order_value') {
-    if (value === '' || value == null) value = value;
-    else {
-      const n = Number(String(value).replace(/,/g, ''));
-      value = Number.isNaN(n) ? value : n;
-    }
-  }
+        // value already coerced in getCleanRules when appropriate, but double-check
+        let value = r.value;
+        if (r.field === 'visits' || r.field === 'total_spend' || r.field === 'avg_order_value') {
+          if (value === '' || value == null) {
+            value = value;
+          } else {
+            const n = Number(String(value).replace(/,/g, ''));
+            value = Number.isNaN(n) ? value : n;
+          }
+        }
 
-  return {
-    field: r.field,
-    value,
-    op: "COND",              // important: backend expects op: "COND"
-    operator: normalizedOp,  // actual comparison token
-  };
-});
+        return {
+          field: r.field,
+          value,
+          op: "COND",              // important: backend expects op: "COND"
+          operator: normalizedOp,  // actual comparison token
+          mongoOp: opToMongo[normalizedOp] ?? normalizedOp,
+        };
+      });
 
+      // Build payload and log it (so you can see what is being sent)
+      const payload = {
+        name: trimmedName,
+        rules: flatRules,
+      };
 
       // DEBUG: log payload so you can inspect what is actually being sent
       console.log("Segment save payload:", JSON.stringify(payload, null, 2));
@@ -290,7 +295,7 @@ const flatRules = cleanedRules.map((r) => {
 
       {/* AI assistant block */}
       <NLToRules
-        availableFields={["last_purchase_date", "total_spend", "visits", "avg_order_value", "city", "signup_date"]}
+        availableFields={["total_spend", "visits", "last_active_at", "created_at", "avg_order_value", "city", "email"]}
         onApply={handleAIApply}
       />
 
