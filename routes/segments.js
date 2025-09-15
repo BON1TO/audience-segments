@@ -39,25 +39,107 @@ router.get('/', async (req, res) => {
 
 // Create a segment
 // POST /api/segments
+// Replace the existing POST / handler with this block
 router.post('/', async (req, res) => {
   try {
-    const { segments } = getCollections(req);
-    const { name, rules } = req.body;
-    if (!name || !rules) return res.status(400).json({ error: 'Missing name or rules' });
+    const { segments, users } = getCollections(req);
+    const astToMongoQuery = req.app.locals && req.app.locals.astToMongoQuery;
 
-    const insertRes = await segments.insertOne({
+    const { name, rules } = req.body || {};
+    if (!name || !Array.isArray(rules)) return res.status(400).json({ error: 'Missing name or rules' });
+
+    // Operator map
+    const OP_MAP = {
+      "<": "$lt", ">": "$gt", "<=": "$lte", ">=": "$gte", "!=": "$ne", "==": "$eq", "=": "$eq",
+      "$lt":"$lt", "$gt":"$gt", "$lte":"$lte", "$gte":"$gte", "$ne":"$ne", "$eq":"$eq"
+    };
+
+    // Fields you expect to be numeric in users collection
+    const numericFields = new Set(['visits','total_spend','totalSpend','money_spent','total_spent']);
+
+    // Normalize each incoming rule (sets mongoOp and coerces numeric values when appropriate)
+    function normalizeRule(r) {
+      const rr = Object.assign({}, r);
+      const raw = (rr.mongoOp || rr.op || rr.operator || "").toString();
+      if (OP_MAP[raw]) rr.mongoOp = OP_MAP[raw];
+      else if (raw && raw.startsWith("$")) rr.mongoOp = raw;
+      else rr.mongoOp = "$eq";
+
+      // If this field is a numeric-type field, coerce value to Number if possible
+      if (numericFields.has(rr.field) && typeof rr.value === "string") {
+        const n = Number(rr.value);
+        if (!Number.isNaN(n)) rr.value = n;
+      }
+
+      // If value was sent as e.g. "true"/"false" convert to boolean
+      if (typeof rr.value === "string") {
+        const lv = rr.value.toLowerCase?.();
+        if (lv === "true") rr.value = true;
+        else if (lv === "false") rr.value = false;
+      }
+
+      return rr;
+    }
+
+    const normalizedRules = (rules || []).map(normalizeRule);
+
+    // Build Mongo query from normalized rules.
+    // If astToMongoQuery exists prefer that (it may support richer logic). Otherwise build a simple AND.
+    let mongoQuery = {};
+    if (normalizedRules.length === 0) mongoQuery = {};
+    else if (astToMongoQuery && typeof astToMongoQuery === 'function') {
+      try {
+        mongoQuery = astToMongoQuery(normalizedRules) || {};
+      } catch (e) {
+        // fallback to manual build if astToMongoQuery fails
+        mongoQuery = {};
+      }
+    }
+
+    // fallback manual build if not using astToMongoQuery or it failed
+    if (!mongoQuery || Object.keys(mongoQuery).length === 0) {
+      mongoQuery = {};
+      normalizedRules.forEach(r => {
+        if (!r.field || !r.mongoOp || r.value === undefined) return;
+        if (!mongoQuery[r.field]) mongoQuery[r.field] = {};
+        mongoQuery[r.field][r.mongoOp] = r.value;
+      });
+    }
+
+    // compute audience_size
+    const audience_size = await users.countDocuments(mongoQuery);
+
+    // signature to avoid duplicates (name + rules)
+    const signature = JSON.stringify({ name, rules: normalizedRules });
+
+    // optional dedupe check
+    const existing = await segments.findOne({ signature });
+    if (existing) {
+      // update audience_size proactively in case it changed
+      await segments.updateOne({ _id: existing._id }, { $set: { audience_size, rules: normalizedRules }});
+      const saved = await segments.findOne({ _id: existing._id });
+      return res.status(200).json(saved);
+    }
+
+    // insert normalized doc
+    const doc = {
       name,
-      rules,
-      audience_size: 0,
-      created_at: new Date(),
-    });
+      rules: normalizedRules,
+      audience_size,
+      signature,
+      created_at: new Date()
+    };
+
+    const insertRes = await segments.insertOne(doc);
     const saved = await segments.findOne({ _id: insertRes.insertedId });
-    res.status(201).json(saved);
+    return res.status(201).json(saved);
+
   } catch (err) {
     console.error('routes/segments POST / error', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
+
 
 /**
  * IMPORTANT: define /:id/users BEFORE /:id

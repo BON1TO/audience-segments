@@ -166,16 +166,29 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
 
       // Build defensive payload: include original op, an 'operator' alias,
       // and a `mongoOp` token (or whatever the backend might prefer).
-      const mappedRules = cleanedRules.map((r) => {
-        const normalizedOp = r.op === "==" ? "=" : r.op;
-        return {
-          field: r.field,
-          value: r.value,
-          op: normalizedOp, // original token, e.g. "<"
-          operator: normalizedOp, // alias many backends use
-          mongoOp: opToMongo[normalizedOp] ?? normalizedOp, // e.g. "$lt"
-        };
-      });
+      const numericFields = new Set(['visits','total_spend','totalSpend','money_spent']);
+const mappedRules = cleanedRules.map((r) => {
+  const normalizedOp = r.op === "==" ? "=" : r.op;
+  let value = r.value;
+
+  // If the rule field looks numeric, try to send a Number
+  if (numericFields.has(r.field)) {
+    const n = Number(value);
+    if (!Number.isNaN(n)) value = n;
+  } else {
+    // keep strings as-is (trim)
+    value = String(value).trim();
+  }
+
+  return {
+    field: r.field,
+    value,
+    op: normalizedOp,
+    operator: normalizedOp,
+    mongoOp: opToMongo[normalizedOp] ?? normalizedOp,
+  };
+});
+
 
       const payload = { name: trimmedName, rules: mappedRules };
 
