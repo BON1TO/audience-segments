@@ -113,7 +113,7 @@ export default function NLToRules({
         <button onClick={handleConvert} disabled={loading || !text}>
           {loading ? 'Converting...' : 'Convert'}
         </button>
-        <button onClick={() => setText("People who haven’t shopped in 6 months and spent over ₹5K")}>Example</button>
+        <button onClick={() => setText("People who haven’t visited in 6 months and spent over ₹5K")}>Example</button>
         <button
           onClick={() => {
             setText('');
