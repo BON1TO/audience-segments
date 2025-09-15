@@ -65,7 +65,7 @@ audience-segments/
     │   │   └── CampaignsList.jsx
     │   └── components/
     │       └── NLToRules.jsx   # AI Assistant UI
-    └── package.json
+    └── package.json 
 
 
 
