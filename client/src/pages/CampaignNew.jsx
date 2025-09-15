@@ -1,6 +1,6 @@
-// client/src/pages/CampaignNew.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../lib/api";
 
 export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
   const navigate = useNavigate();
@@ -14,18 +14,15 @@ export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, description }),
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Status ${res.status}`);
-      }
+      // use centralized api
+      const res = await api.post(apiUrl, { title, description });
+      // if backend returns a created document, navigate to list
       navigate("/campaigns");
     } catch (err) {
-      setError(String(err.message || "Save failed"));
+      console.error("Campaign save error:", err);
+      // show a useful message
+      const msg = err?.response?.data?.error ?? err?.message ?? String(err);
+      setError(msg);
     } finally {
       setSaving(false);
     }
