@@ -2,11 +2,14 @@
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { listItemVariants } from "../styles/motionVariants";
+import { listItemVariants, fadeIn } from "../styles/motionVariants";
 import "../styles/theme.css";
-import api, { getCampaigns as getCampaignsHelper, getSegments as getSegmentsHelper, getCampaign as getCampaignHelper } from "../lib/api";
+import api from "../lib/api"; // <-- import axios instance
 
-export default function CampaignsList() {
+export default function CampaignsList({
+  apiUrl = "/api/campaigns",
+  segmentsApi = "/api/segments",
+}) {
   const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,7 +20,7 @@ export default function CampaignsList() {
   const [attachSegmentId, setAttachSegmentId] = useState("");
   const [previewing, setPreviewing] = useState(null);
 
-  // Helper functions retained as-is (normalizeId/getSegmentName/getSegmentAudience)...
+  // helpers (unchanged) ...
   const normalizeId = (raw) => {
     if (!raw) return null;
     if (typeof raw === "string") {
@@ -37,9 +40,7 @@ export default function CampaignsList() {
 
   const getSegmentName = (campaignOrSegment) => {
     const segCandidate =
-      campaignOrSegment && campaignOrSegment.segment
-        ? campaignOrSegment.segment
-        : campaignOrSegment;
+      campaignOrSegment && campaignOrSegment.segment ? campaignOrSegment.segment : campaignOrSegment;
     if (segCandidate && typeof segCandidate === "object") {
       return segCandidate.name || segCandidate.title || String(segCandidate._id || segCandidate.id).slice(0, 8);
     }
@@ -80,45 +81,70 @@ export default function CampaignsList() {
     return 0;
   };
 
-  // load campaigns
+  // ---------- data loading ----------
   useEffect(() => {
     let mounted = true;
-    (async () => {
+    const controller = new AbortController();
+
+    async function load() {
       try {
         setLoading(true);
         setError("");
-        // use helper to fetch campaigns (returns normalized { items,... })
-        const resp = await getCampaignsHelper();
-        // getCampaigns helper returns { items, total, ... } via normalizeListResponse
-        const list = Array.isArray(resp.items) ? resp.items : Array.isArray(resp) ? resp : [];
+
+        // use axios (api) instance (supports cancellation via CancelToken if needed)
+        const resp = await api.get(apiUrl); // resp.data expected
         if (!mounted) return;
-        setCampaigns(list);
+
+        const data = resp.data;
+        const items =
+          Array.isArray(data) && data.length
+            ? data
+            : Array.isArray(data?.items)
+            ? data.items
+            : Array.isArray(data?.campaigns)
+            ? data.campaigns
+            : Array.isArray(data?.data)
+            ? data.data
+            : [];
+
+        setCampaigns(items);
       } catch (e) {
-        console.error("[CampaignsList] fetch error:", e);
-        if (mounted) setError("Failed to load campaigns");
+        if (e.name === "CanceledError" || e?.__CANCEL__) {
+          console.log("[CampaignsList] fetch aborted");
+        } else {
+          console.error("[CampaignsList] fetch error:", e);
+          setError(String(e.message || "Failed to fetch campaigns"));
+        }
       } finally {
         if (mounted) setLoading(false);
       }
-    })();
-    return () => (mounted = false);
-  }, []);
+    }
 
-  // load segments for attaching/labels
+    load();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [apiUrl]);
+
   useEffect(() => {
-    let mounted = true;
     (async () => {
       try {
-        const resp = await getSegmentsHelper();
-        const list = Array.isArray(resp.items) ? resp.items : Array.isArray(resp) ? resp : [];
-        if (!mounted) return;
+        const resp = await api.get(segmentsApi);
+        if (!resp || resp.status >= 400) {
+          console.warn("[CampaignsList] failed to load segments", resp?.status);
+          return;
+        }
+        const data = resp.data;
+        const list = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : data.segments || [];
         setSegments(list);
       } catch (err) {
         console.warn("[CampaignsList] segments load error:", err);
       }
     })();
-    return () => (mounted = false);
-  }, []);
+  }, [segmentsApi]);
 
+  // ---------- actions ----------
   const onCreate = () => navigate("/campaigns/new");
 
   const onPreview = async (c) => {
@@ -132,23 +158,31 @@ export default function CampaignsList() {
 
     try {
       setPreviewing({ _loading: true });
-      const campaign = (await getCampaignHelper(id)) || null;
-      if (!campaign) throw new Error("Campaign not found");
 
-      // compute audience via segment endpoints using helper calls
+      const resp = await api.get(`${apiUrl}/${id}`);
+      if (!resp || resp.status >= 400) {
+        const txt = resp?.data ? JSON.stringify(resp.data) : `Status ${resp?.status}`;
+        throw new Error(txt || `Status ${resp?.status}`);
+      }
+      const campaign = resp.data;
+
+      // compute audience (try segment users endpoint)
       let audience = typeof campaign.audience_size === "number" ? campaign.audience_size : 0;
       const segId = campaign.segment ?? campaign.segmentId ?? null;
       const segIdNorm = normalizeId(segId);
       if (segIdNorm) {
         try {
-          // try /api/segments/:id/users?limit=1 using helper (but that helper returns normalized data)
-          const su = await api.get(`/api/segments/${segIdNorm}/users`, { params: { limit: 1 } });
-          if (su?.data && typeof su.data.total === "number") {
-            audience = su.data.total;
+          // use absolute backend for segment user requests (axios)
+          const suResp = await api.get(`/api/segments/${segIdNorm}/users?limit=1`);
+          if (suResp.status === 200) {
+            const suData = suResp.data;
+            if (typeof suData.total === "number") audience = suData.total;
           } else {
-            // fallback to segment doc
-            const sdoc = await api.get(`/api/segments/${segIdNorm}`);
-            if (sdoc?.data && typeof sdoc.data.audience_size === "number") audience = sdoc.data.audience_size;
+            const sres = await api.get(`/api/segments/${segIdNorm}`);
+            if (sres.status === 200) {
+              const sdoc = sres.data;
+              if (typeof sdoc.audience_size === "number") audience = sdoc.audience_size;
+            }
           }
         } catch (e) {
           console.warn("Failed to fetch segment audience:", e);
@@ -192,14 +226,19 @@ export default function CampaignsList() {
 
     setAttachLoading(true);
     try {
-      const url = `/api/campaigns/${campaignId}`;
-      const body = { segmentId: segId || null };
+      const url = `${apiUrl}/${campaignId}`;
+      const body = { segmentId: segId || "" };
 
-      await api.patch(url, body);
+      // use axios PATCH
+      const res = await api.patch(url, body);
+      if (!res || res.status >= 400) {
+        throw new Error(JSON.stringify(res?.data || `Status ${res?.status}`));
+      }
 
-      // refresh campaigns using helper
-      const refreshed = await getCampaignsHelper();
-      const items = Array.isArray(refreshed.items) ? refreshed.items : Array.isArray(refreshed) ? refreshed : [];
+      // refresh campaigns
+      const refreshedResp = await api.get(apiUrl);
+      const refreshed = refreshedResp.data;
+      const items = Array.isArray(refreshed) ? refreshed : refreshed.items || refreshed.campaigns || refreshed.data || [];
       setCampaigns(items);
       closeAttach();
     } catch (err) {
@@ -210,6 +249,7 @@ export default function CampaignsList() {
     }
   };
 
+  // ---------- render ----------
   if (loading) {
     return (
       <div className="container">
@@ -241,8 +281,4 @@ export default function CampaignsList() {
 
   return (
     <div className="container" role="region" aria-labelledby="campaigns-heading">
-      {/* ... the rest of your render is unchanged, using campaigns state */}
-      {/* (omitted here for brevity, keep the JSX from your original file) */}
-    </div>
-  );
-}
+      {/* ... rest is unchanged ... */}

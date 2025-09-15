@@ -1,9 +1,9 @@
 // client/src/pages/CampaignNew.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../lib/api";
+import api from "../lib/api"; // <-- use centralized axios instance
 
-export default function CampaignNew() {
+export default function CampaignNew({ apiUrl = "/api/campaigns" }) {
   const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -15,13 +15,18 @@ export default function CampaignNew() {
     setSaving(true);
     setError("");
     try {
-      const res = await api.post("/api/campaigns", { title, description });
-      // if backend returns created doc, you can navigate to list
+      // use axios instance (it will use the BASE you set in lib/api.js)
+      const resp = await api.post(apiUrl, { title, description });
+      // success -> go to campaigns list
       navigate("/campaigns");
     } catch (err) {
-      console.error("Campaign save error:", err?.response?.data ?? err);
-      const txt = err?.response?.data?.message || err?.message || "Save failed";
-      setError(String(txt));
+      // axios error handling
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "Save failed";
+      setError(String(msg));
     } finally {
       setSaving(false);
     }
