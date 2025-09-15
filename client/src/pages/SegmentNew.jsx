@@ -230,22 +230,28 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
 
       // Build a flat rules array (not AST). This is the important change:
       // -> send plain rule objects so backend's normalization can prefer r.operator or r.op
-      const flatRules = cleanedRules.map((r) => {
-        const normalizedOp = r.op === "==" ? "=" : r.op;
-        return {
-          field: r.field,
-          value: r.value,
-          op: normalizedOp, // e.g. ">"
-          operator: normalizedOp, // alias backend might look for
-          mongoOp: opToMongo[normalizedOp] ?? normalizedOp, // e.g. "$lt"
-        };
-      });
+      // Build a flat rules array (not AST). Ensure backend-friendly shape
+const flatRules = cleanedRules.map((r) => {
+  const normalizedOp = r.op === "==" ? "=" : r.op;
 
-      // Build payload using flat rules (no AST wrapper)
-      const payload = {
-        name: trimmedName,
-        rules: flatRules,
-      };
+  // coerce numeric fields to numbers when possible
+  let value = r.value;
+  if (r.field === 'visits' || r.field === 'total_spend' || r.field === 'avg_order_value') {
+    if (value === '' || value == null) value = value;
+    else {
+      const n = Number(String(value).replace(/,/g, ''));
+      value = Number.isNaN(n) ? value : n;
+    }
+  }
+
+  return {
+    field: r.field,
+    value,
+    op: "COND",              // important: backend expects op: "COND"
+    operator: normalizedOp,  // actual comparison token
+  };
+});
+
 
       // DEBUG: log payload so you can inspect what is actually being sent
       console.log("Segment save payload:", JSON.stringify(payload, null, 2));
