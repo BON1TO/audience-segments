@@ -10,6 +10,55 @@ function getCollections(req) {
   return cols;
 }
 
+/**
+ * Normalize incoming rules to a consistent shape:
+ * - Accepts client shapes like { op: "COND", operator: ">" } or { op: ">", operator: ">" }
+ * - Coerces numeric-like strings to numbers (handles "5k", "₹5,000", "1,000")
+ * - Normalizes simple textual ops ("==", "greater", "over", "less", "under")
+ * Returns array of { field, op, value }.
+ */
+function normalizeIncomingRules(rules = []) {
+  if (!Array.isArray(rules)) return [];
+
+  return rules
+    .map((r = {}) => {
+      const field = String(r.field ?? r.name ?? '').trim();
+      // Prefer operator when op is missing or op === 'COND'
+      let opRaw = (r.op ?? r.operator ?? '>') + '';
+      if (opRaw && opRaw.toString().toUpperCase() === 'COND' && r.operator) {
+        opRaw = String(r.operator);
+      }
+      // normalize tokens
+      let op = opRaw.toString().trim();
+      if (op === '==') op = '=';
+      if (/^(greater|over|more)/i.test(op)) op = '>';
+      if (/^(less|under)/i.test(op)) op = '<';
+
+      // value candidates from different possible keys
+      let value = r.value ?? r.v ?? r.val ?? r.value_relative ?? (r.condition && r.condition.value);
+
+      // coerce numeric-like strings for common numeric fields
+      if (typeof value === 'string') {
+        let s = value.trim();
+        // remove currency symbols/spaces
+        s = s.replace(/[₹,$\s]/g, '').toLowerCase();
+        // shorthand like 5k
+        const kMatch = s.match(/^([\d,.]+)k$/);
+        if (kMatch) {
+          const n = parseFloat(kMatch[1].replace(/,/g, '')) * 1000;
+          if (!Number.isNaN(n)) value = n;
+        } else {
+          const n = Number(s.replace(/,/g, ''));
+          if (!Number.isNaN(n)) value = n;
+          else value = value.trim(); // keep original trimmed string if not numeric
+        }
+      }
+
+      return { field, op, value };
+    })
+    .filter((r) => r.field && (r.value !== undefined && r.value !== ''));
+}
+
 // Provide a small template for the "New segment" UI
 // GET /api/segments/new
 router.get('/new', async (req, res) => {
@@ -39,8 +88,6 @@ router.get('/', async (req, res) => {
 
 // Create a segment
 // POST /api/segments
-// Create a segment
-// POST /api/segments
 router.post('/', async (req, res) => {
   try {
     const { segments, users } = getCollections(req);
@@ -51,30 +98,8 @@ router.post('/', async (req, res) => {
     if (!name || !rules) return res.status(400).json({ error: 'Missing name or rules' });
     if (!Array.isArray(rules)) return res.status(400).json({ error: 'Rules must be an array' });
 
-    // Defensive normalization & type coercion:
-    // - Ensure each rule has field/op/value
-    // - Convert numeric-looking values to numbers so queries like visits < 50 match numeric fields
-    const normalized = rules.map((r = {}) => {
-      const field = String(r.field ?? r.name ?? '').trim();
-      let op = (r.op ?? r.operator ?? '>').toString();
-      // normalize common eq token
-      if (op === '==') op = '=';
-      let value = r.value ?? r.v ?? r.val ?? (r.condition && r.condition.value);
-
-      // If value is not null/undefined, coerce possible numeric strings to numbers
-      if (typeof value === 'string') {
-        const trimmed = value.trim();
-        // integer or float detection
-        if (trimmed !== '' && !Number.isNaN(Number(trimmed))) {
-          // only convert when it looks like a pure number
-          value = Number(trimmed);
-        } else {
-          value = trimmed;
-        }
-      }
-
-      return { field, op, value };
-    }).filter(r => r.field && (r.value !== undefined && r.value !== ''));
+    // Use the tolerant normalizer (handles COND/operator, numeric coercion)
+    const normalized = normalizeIncomingRules(rules);
 
     // Build mongo query from normalized rules (if astToMongoQuery available)
     let mongoQuery = {};
@@ -97,13 +122,10 @@ router.post('/', async (req, res) => {
     // Compute audience size using mongoQuery if non-empty, otherwise 0
     let audience_size = 0;
     try {
-      // if mongoQuery is an empty object, countDocuments({}) returns total users — which might be okay,
-      // but to be explicit, only run count if we actually have any filters or rules were provided.
-      if (Object.keys(mongoQuery).length > 0) {
+      if (mongoQuery && Object.keys(mongoQuery).length > 0) {
         audience_size = await users.countDocuments(mongoQuery);
       } else if (normalized.length > 0) {
-        // ast returned empty query despite rules — safe fallback: attempt an exact field match approach
-        // (optional) try to build a naive query: OR of field:value equality for each rule
+        // fallback: naive OR equality on fields (useful if astToMongoQuery returned {})
         const fallbackOr = normalized.map(r => ({ [r.field]: r.value }));
         if (fallbackOr.length) {
           audience_size = await users.countDocuments({ $or: fallbackOr });
