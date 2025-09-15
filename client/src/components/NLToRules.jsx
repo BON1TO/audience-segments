@@ -83,9 +83,18 @@ export default function NLToRules({ availableFields = ['last_purchase_date','tot
 
           <div style={{ marginBottom: 8 }}>
             <strong>Parsed AST</strong>
-            <pre style={{ background: '#fafafa', padding: 8, borderRadius: 6, maxHeight: 160, overflow: 'auto' }}>
-              {JSON.stringify(ast, null, 2)}
-            </pre>
+            <pre style={{
+  background: '#1e1e1e',   // dark gray (VS Code-like)
+  color: '#f8f8f2',        // light text
+  padding: 12,
+  borderRadius: 6,
+  maxHeight: 200,
+  overflow: 'auto',
+  fontSize: 13,
+  lineHeight: 1.4
+}}>
+  {JSON.stringify(ast, null, 2)}
+</pre>
           </div>
 
           <div style={{ marginTop: 8 }}>
