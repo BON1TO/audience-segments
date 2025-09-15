@@ -103,7 +103,7 @@ export default function NLToRules({
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={
-          'e.g. "People who haven’t  in 6 months and spent over ₹5K", or "People who visit over 30 times", "haven\'t visited in 5 months"'
+          'e.g. "People who haven’t visited in 6 months and spent over ₹5K", or "People who visit over 30 times", "haven\'t visited in 5 months"'
         }
         rows={3}
         style={{ width: '100%', marginBottom: 8, padding: 8 }}
