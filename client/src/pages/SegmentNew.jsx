@@ -87,6 +87,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
   }
 
   // Helper to clean and validate rules before sending
+    
   function getCleanRules() {
     // Allowed ops your frontend uses; map to backend tokens here if needed
     const allowedOps = new Set([">", "<", ">=", "<=", "=", "==", "!=", "contains"]);
@@ -111,7 +112,37 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         if (opRaw === null) opRaw = ">";
         if (opRaw === "==") opRaw = "=";
         const op = String(opRaw).trim();
-        const value = String(r?.value ?? "").trim();
+        let value = String(r?.value ?? "").trim();
+
+        // --- Special normalization for email contains ---
+        // If user is building a "contains" rule on the email field, normalize common inputs:
+        // - "user@gmail.com"  -> ".com"
+        // - "@gmail.com"      -> ".com"
+        // - "gmail.com"       -> ".com"
+        // - "example.com"     -> ".com"
+        //
+        // The rule: if field === 'email' and op === 'contains', and value contains '@' or a dot,
+        // keep only the suffix starting from the first dot (so "gmail.com" -> ".com",
+        // "example.co.in" -> ".co.in"). If no dot, leave value as-is.
+        if (field.toLowerCase() === "email" && op.toLowerCase() === "contains") {
+          // remove leading/trailing whitespace and any leading @ or username@
+          // e.g. "user@gmail.com" -> "gmail.com", "@gmail.com" -> "gmail.com"
+          const atIndex = value.indexOf("@");
+          if (atIndex !== -1) {
+            value = value.slice(atIndex + 1).trim();
+          } else if (value.startsWith("@")) {
+            value = value.slice(1).trim();
+          }
+          // if there is a dot in the remaining value, keep only from the first dot to the end
+          const dotIndex = value.indexOf(".");
+          if (dotIndex !== -1) {
+            value = value.slice(dotIndex); // includes the leading dot, e.g. ".com" or ".co.in"
+          } else {
+            // no dot — leave as-is (user might intentionally search for a substring)
+            value = value;
+          }
+        }
+
         return { field, op, value };
       })
       .filter((r) => r.field !== "" && r.value !== ""); // require both field and value
@@ -127,6 +158,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
 
     return cleaned;
   }
+
 
   async function handleSave(e) {
     e?.preventDefault?.();
