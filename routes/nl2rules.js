@@ -117,40 +117,96 @@ function buildSystemPrompt(availableFields = []) {
   "name_suggestion": "<short name>",
   "logic": "AND|OR|NOT",
   "rules": [
-    {"field":"<one of: ${availableFields.join(', ')}>", "op":"<>, >, <, between, exists, not_exists, contains, before", "value": "<value or [min,max]>", "value_relative": "<optional like '6 months'>", "currency":"INR"}
+    {"field":"<one of: ${availableFields.join(', ')}>", "op":"<, >, =, between, exists, not_exists, contains, before", "value": "<value or [min,max]>", "value_relative": "<optional like '6 months'>", "currency":"INR"}
   ]
 }
 
-Rules:
-- Use 'value_relative' for relative times (e.g., '6 months').
-- Normalize numeric amounts if possible (remove currency signs like ₹, commas, and convert '5K' to 5000).
-- Output JSON only, nothing else.`;
+Notes:
+- Use 'total_spend' for money spent.
+- Use 'visits' for number of visits.
+- Use 'last_active_at' for last activity/last visit recency.
+- Use 'created_at' for signup date.
+- Normalize numeric amounts (remove currency signs like ₹, commas, and convert '5K' to 5000).
+- Output only valid JSON.`;
 }
 
-// ----------------- fallback small extractor -----------------
+
+
+// ----------------- fallback small extractor (upgraded with visits + inactivity) -----------------
 function fallbackExtract(text, availableFields = []) {
   const rules = [];
   const lower = text.toLowerCase();
 
-  const inactivity = lower.match(/haven'?t shopp?ed in (\d+\s*(?:year|years|month|months|week|weeks|day|days))/i)
-    || lower.match(/not shopp?ed in (\d+\s*(?:year|years|month|months|week|weeks|day|days))/i);
-  if (inactivity) {
-    const field = availableFields.includes('last_purchase_date') ? 'last_purchase_date' : (availableFields[0] || 'last_purchase_date');
-    rules.push({ field, op: 'before', value_relative: inactivity[1] });
+  // 1) Inactivity / last-visit patterns
+  // Matches phrases like:
+  // - "haven't visited in 5 months"
+  // - "not visited in 2 weeks"
+  // - "last visit more than 5 months ago"
+  // - "haven't shopped in 6 months" (kept)
+  const inactivityPatterns = [
+    /haven'?t (?:shopp?ed|visited|been active|logged in) in (\d+\s*(?:year|years|month|months|week|weeks|day|days))/i,
+    /not (?:shopp?ed|visited|been active|logged in) in (\d+\s*(?:year|years|month|months|week|weeks|day|days))/i,
+    /last (?:visit|seen|active) (?:more than|over)?\s*(\d+\s*(?:year|years|month|months|week|weeks|day|days))\s*(?:ago)?/i
+  ];
+  for (const pat of inactivityPatterns) {
+    const m = lower.match(pat);
+    if (m) {
+      
+      const field = availableFields.includes('last_active_at')
+  ? 'last_active_at'
+  : (availableFields.includes('last_purchase_date') ? 'last_purchase_date' : (availableFields[0] || 'last_active_at'));
+
+      rules.push({ field, op: 'before', value_relative: m[1] });
+      break;
+    }
   }
 
-  const spent = lower.match(/spent (?:over |more than |>)?\s*₹?([\d,\.]+k?)/i) || lower.match(/spent (?:over |more than |>)?\s*([0-9,\.]+k?)\s*(inr|rs|₹)?/i);
+  // 2) Visits numeric patterns
+  // Matches:
+  // - "visited over 30 times"
+  // - "visits over 30 times"
+  // - "people who visit > 30"
+  // - "users with visits >= 10"
+  // - "visited between 10 and 20 times"
+  const visitsBetween = lower.match(/visits?\s*(?:between)\s*(\d{1,6})\s*(?:and|-|to)\s*(\d{1,6})/i)
+    || lower.match(/visited\s*(?:between)\s*(\d{1,6})\s*(?:and|-|to)\s*(\d{1,6})/i);
+  if (visitsBetween) {
+    const field = availableFields.includes('visits') ? 'visits' : (availableFields[0] || 'visits');
+    rules.push({ field, op: 'between', value: [parseInt(visitsBetween[1], 10), parseInt(visitsBetween[2], 10)] });
+  } else {
+    // greater / less / exact patterns
+    const visitsGt = lower.match(/visits?\s*(?:of|over|more than|>)\s*(\d{1,6})/i)
+      || lower.match(/visited\s*(?:over|more than|>)\s*(\d{1,6})/i)
+      || lower.match(/visits?\s*(?:>=|≥)\s*(\d{1,6})/i);
+    if (visitsGt) {
+      const field = availableFields.includes('visits') ? 'visits' : (availableFields[0] || 'visits');
+      rules.push({ field, op: '>', value: parseInt(visitsGt[1], 10) });
+    } else {
+      const visitsLt = lower.match(/visits?\s*(?:less than|under|<|<=|≤)\s*(\d{1,6})/i)
+        || lower.match(/visited\s*(?:less than|under|<|<=|≤)\s*(\d{1,6})/i);
+      if (visitsLt) {
+        const field = availableFields.includes('visits') ? 'visits' : (availableFields[0] || 'visits');
+        rules.push({ field, op: '<', value: parseInt(visitsLt[1], 10) });
+      }
+    }
+  }
+
+  // 3) Money spent patterns (existing)
+  const spent = lower.match(/spent (?:over |more than |>)?\s*₹?([\d,\.]+k?)/i)
+    || lower.match(/spent (?:over |more than |>)?\s*([0-9,\.]+k?)\s*(inr|rs|₹)?/i);
   if (spent) {
     const amount = spent[1];
     const field = availableFields.includes('total_spend') ? 'total_spend' : (availableFields[0] || 'total_spend');
     rules.push({ field, op: '>', value: amount, currency: 'INR' });
   }
 
+  // 4) city / location fallback (existing)
   if (rules.length === 0) {
     const cityMatch = text.match(/in ([A-Z][a-z]+(?: [A-Z][a-z]+)*)/);
     if (cityMatch) rules.push({ field: 'city', op: '=', value: cityMatch[1] });
   }
 
+  // Build final AST (keep same structure)
   return {
     intent: 'create_segment',
     name_suggestion: rules.length ? 'Converted segment' : 'Unclear segment',
@@ -159,9 +215,12 @@ function fallbackExtract(text, availableFields = []) {
   };
 }
 
+
+
 // ----------------- route -----------------
 router.post('/', async (req, res) => {
-  const { text, availableFields = ['last_purchase_date','total_spend','visits','avg_order_value','city','signup_date'] } = req.body || {};
+  const { text, availableFields = ['total_spend','visits','last_active_at','created_at','avg_order_value','city'] } = req.body || {};
+
   if (!text) return res.status(400).json({ error: 'text required' });
 
   const COHERE_KEY = process.env.COHERE_API_KEY;
