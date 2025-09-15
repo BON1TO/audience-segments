@@ -503,6 +503,8 @@ async function start(){
   // Mount the routes
   tryMountRouteFlexible('./routes/segments', '/api/segments');
   tryMountRouteFlexible('./routes/campaigns', '/api/campaigns');
+  tryMountRouteFlexible('./routes/users', '/api/users');
+
 
 
   // Start server
