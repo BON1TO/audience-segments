@@ -3,12 +3,29 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
 
+// helper to access collections and helpers added to app.locals in server.js
 function getCollections(req) {
   const cols = req.app && req.app.locals && req.app.locals.collections;
   if (!cols) throw new Error('Collections not available on req.app.locals.collections');
   return cols;
 }
 
+// Provide a small template for the "New segment" UI
+// GET /api/segments/new
+router.get('/new', async (req, res) => {
+  try {
+    // Optionally log origin for debug
+    // console.log('[GET /api/segments/new] origin', req.headers.origin);
+    return res.status(200).json({ name: "", rules: [{ field: "", op: ">", value: "" }] });
+  } catch (err) {
+    console.error('routes/segments GET /new error', err);
+    // Non-fatal fallback
+    return res.status(200).json({ name: "", rules: [{ field: "", op: ">", value: "" }] });
+  }
+});
+
+// List segments
+// GET /api/segments
 router.get('/', async (req, res) => {
   try {
     const { segments } = getCollections(req);
@@ -20,11 +37,14 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Create a segment
+// POST /api/segments
 router.post('/', async (req, res) => {
   try {
-    const { segments, users } = getCollections(req);
+    const { segments } = getCollections(req);
     const { name, rules } = req.body;
     if (!name || !rules) return res.status(400).json({ error: 'Missing name or rules' });
+
     const insertRes = await segments.insertOne({ name, rules, audience_size: 0, created_at: new Date() });
     const saved = await segments.findOne({ _id: insertRes.insertedId });
     res.status(201).json(saved);
@@ -34,6 +54,8 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Get one segment by id
+// GET /api/segments/:id
 router.get('/:id', async (req, res) => {
   try {
     const { segments } = getCollections(req);
@@ -44,6 +66,61 @@ router.get('/:id', async (req, res) => {
     res.json(seg);
   } catch (err) {
     console.error('routes/segments GET /:id error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NEW / MISSING endpoint: GET users for a segment (paginated).
+// GET /api/segments/:id/users
+router.get('/:id/users', async (req, res) => {
+  try {
+    const { segments, users } = getCollections(req);
+    const astToMongoQuery = req.app.locals && req.app.locals.astToMongoQuery;
+
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ error: 'Missing segment id' });
+
+    // Allow both plain string id or ObjectId
+    const seg = ObjectId.isValid(id)
+      ? await segments.findOne({ _id: new ObjectId(id) })
+      : await segments.findOne({ _id: id }) || await segments.findOne({ _id: String(id) });
+
+    if (!seg) return res.status(404).json({ error: 'Segment not found' });
+
+    // Pagination
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(200, parseInt(req.query.limit || '50', 10));
+    const skip = (page - 1) * limit;
+
+    // Case A: segment stores explicit userIds array
+    if (Array.isArray(seg.userIds) && seg.userIds.length) {
+      const ids = seg.userIds.map(i => {
+        try { return typeof i === 'string' && ObjectId.isValid(i) ? new ObjectId(i) : i; } catch { return i; }
+      });
+      const q = { _id: { $in: ids } };
+      const usersList = await users.find(q, { projection: { name:1, email:1, total_spend:1, visits:1, last_active_at:1 } }).skip(skip).limit(limit).toArray();
+      const total = await users.countDocuments(q);
+      return res.json({ total, page, limit, users: usersList });
+    }
+
+    // Case B: segment has rules/AST -> convert to Mongo query using astToMongoQuery
+    if (seg.rules && astToMongoQuery && typeof astToMongoQuery === 'function') {
+      let mongoQuery = {};
+      try {
+        mongoQuery = astToMongoQuery(seg.rules) || {};
+      } catch (e) {
+        return res.status(400).json({ error: 'Invalid segment rules: ' + e.message });
+      }
+
+      const usersList = await users.find(mongoQuery, { projection: { name:1, email:1, total_spend:1, visits:1, last_active_at:1 } }).skip(skip).limit(limit).toArray();
+      const total = await users.countDocuments(mongoQuery);
+      return res.json({ total, page, limit, users: usersList });
+    }
+
+    // Fallback: no userIds and no rules
+    return res.json({ total: 0, page, limit, users: [] });
+  } catch (err) {
+    console.error('routes/segments GET /:id/users error', err);
     res.status(500).json({ error: err.message });
   }
 });
