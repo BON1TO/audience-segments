@@ -128,7 +128,7 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
     return cleaned;
   }
 
-  async function handleSave(e) {
+    async function handleSave(e) {
     e?.preventDefault?.();
     const trimmedName = String(name || "").trim();
     if (!trimmedName) {
@@ -164,28 +164,45 @@ export default function SegmentNew({ templateUrl = "/api/segments/new" }) {
         contains: "$contains",
       };
 
-      // Build defensive payload: include original op, an 'operator' alias,
-      // and a `mongoOp` token (or whatever the backend might prefer).
-      const mappedRules = cleanedRules.map((r) => {
+      // Build a flat rules array (not AST). This is the important change:
+      // -> send plain rule objects so backend's normalization can prefer r.operator or r.op
+      const flatRules = cleanedRules.map((r) => {
         const normalizedOp = r.op === "==" ? "=" : r.op;
         return {
           field: r.field,
           value: r.value,
-          op: normalizedOp, // original token, e.g. "<"
-          operator: normalizedOp, // alias many backends use
+          op: normalizedOp,        // e.g. ">"
+          operator: normalizedOp,  // alias backend might look for
           mongoOp: opToMongo[normalizedOp] ?? normalizedOp, // e.g. "$lt"
         };
       });
 
-      const payload = {
-  name: trimmedName,
-  rules: mappedRules.map(r => ({
-    op: "COND",
-    field: r.field,
-    operator: r.op,   // use r.op as operator
-    value: r.value
-  }))
-};
+      const payload = { name: trimmedName, rules: flatRules };
+
+      // DEBUG: log payload so you can inspect what is actually being sent
+      console.log("Segment save payload:", JSON.stringify(payload, null, 2));
+
+      // Post to your API (server expects name + rules)
+      const res = await api.post("/api/segments", payload);
+      const saved = res.data;
+      alert("Segment saved");
+
+      // Prefer navigating to detail if backend returned an id, otherwise go to list
+      if (saved && (saved._id || saved.id)) {
+        const id = saved._id ?? saved.id;
+        navigate(`/segments/${id}`);
+      } else {
+        navigate("/segments");
+      }
+    } catch (err) {
+      console.error("Save error:", err?.response?.data ?? err.message);
+      const msg = err?.response?.data?.message ?? JSON.stringify(err?.response?.data) ?? err?.message ?? "Save failed";
+      alert("Save failed: " + msg);
+    } finally {
+      setSaving(false);
+    }
+  }
+
 
 
       // DEBUG: log payload so you can inspect what is actually being sent
